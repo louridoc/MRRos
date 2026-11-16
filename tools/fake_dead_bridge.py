@@ -5,7 +5,6 @@ Used to test the client's liveness detection locally (a real half-open socket is
 reproduce on one machine). Usage: tools/ros.sh jazzy python tools/fake_dead_bridge.py [port]
 """
 
-import asyncio
 import sys
 
 from aiohttp import web

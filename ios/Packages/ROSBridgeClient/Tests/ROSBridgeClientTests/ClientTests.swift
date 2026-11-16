@@ -207,6 +207,48 @@ struct ClientTests {
         await client.disconnect()
     }
 
+    /// A retry whose handshake is still in flight when the user reconnects must not hijack the
+    /// newer connection (it must close its own socket and resend nothing).
+    @Test func staleRetryCannotHijackNewerConnection() async throws {
+        let mock = MockWebSocketTransport()
+        let client = RosbridgeClient(
+            transportFactory: { _ in mock },
+            reconnect: ReconnectPolicy(initialDelay: .milliseconds(10), maxDelay: .milliseconds(10), maxAttempts: 3),
+            heartbeat: .none
+        )
+        try await client.connect(to: testURL)
+        let sub = await client.subscribe("/tf", as: TF2Msgs.TFMessage.self)
+        #expect(await mock.waitForSent(count: 1))
+
+        await mock.setConnectDelay(.milliseconds(150)) // retry handshake hangs for a while
+        await mock.dropConnection()
+        try await Task.sleep(for: .milliseconds(40)) // retry #1 is now inside connect()
+        #expect(await mock.connectAttempts == 2)
+
+        await mock.setConnectDelay(nil)
+        try await client.connect(to: testURL) // user reconnects while the retry is still handshaking
+        #expect(await client.state == .connected)
+        try await Task.sleep(for: .milliseconds(250)) // let the stale retry's connect() return
+
+        #expect(await client.state == .connected)
+        let subs = await mock.sentOps().filter { $0["op"]?.stringValue == "subscribe" }
+        #expect(subs.count == 2, "initial + user reconnect; the stale retry must not resend")
+        sub.cancel()
+        await client.disconnect()
+    }
+
+    @Test func disconnectDuringHandshakeLeavesDisconnected() async throws {
+        let mock = MockWebSocketTransport()
+        let client = RosbridgeClient(transportFactory: { _ in mock }, reconnect: .none, heartbeat: .none)
+        await mock.setConnectDelay(.milliseconds(100))
+        let connecting = Task { try await client.connect(to: testURL) }
+        try await Task.sleep(for: .milliseconds(30))
+        await client.disconnect()
+        await #expect(throws: RosbridgeError.self) { try await connecting.value }
+        try await Task.sleep(for: .milliseconds(120))
+        #expect(await client.state == .disconnected)
+    }
+
     @Test func givesUpAfterMaxAttempts() async throws {
         let (client, mock) = makeClient(policy: ReconnectPolicy(
             initialDelay: .milliseconds(5), maxDelay: .milliseconds(5), maxAttempts: 2

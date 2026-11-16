@@ -88,6 +88,9 @@ public final class ROSSession {
         jointState = nil
         jointRateHz = 0
         lastJointUpdate = nil
+        robotName = nil
+        urdf = nil
+        topics = []
         jointStamps.removeAll()
     }
 
@@ -139,19 +142,15 @@ public final class ROSSession {
         jointStamps.append(now)
         jointStamps.removeAll { now - $0 > .seconds(1) }
         if jointStamps.count >= 2, let first = jointStamps.first {
-            let span = now - first
-            let seconds = Double(span.components.seconds) + Double(span.components.attoseconds) / 1e18
+            let seconds = (now - first) / .seconds(1)
             jointRateHz = seconds > 0 ? Double(jointStamps.count - 1) / seconds : 0
         }
     }
 
-    /// `<robot name="…">` from a URDF string, without a full XML parse (URDFKit does that in M2).
+    /// `<robot … name="…">` from a URDF string, without a full XML parse (URDFKit does that in M2).
+    /// Matches the attribute `name` only (not `filename=`), anywhere inside the `<robot` tag.
     static func robotName(in urdf: String) -> String? {
-        guard let range = urdf.range(of: #"<robot\s+[^>]*name="([^"]+)""#, options: .regularExpression)
-        else { return nil }
-        let tag = urdf[range]
-        guard let q1 = tag.range(of: "name=\"")?.upperBound,
-              let q2 = tag[q1...].firstIndex(of: "\"") else { return nil }
-        return String(tag[q1 ..< q2])
+        let pattern = /<robot\b[^>]*?\sname="([^"]+)"/
+        return urdf.firstMatch(of: pattern).map { String($0.1) }
     }
 }

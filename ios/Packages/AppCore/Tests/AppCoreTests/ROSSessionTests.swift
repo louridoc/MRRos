@@ -64,6 +64,9 @@ struct ROSSessionTests {
         await session.disconnect()
         #expect(session.state == .disconnected)
         #expect(session.jointState == nil)
+        #expect(session.robotName == nil, "previous bridge's identity must not survive a disconnect")
+        #expect(session.urdf == nil)
+        #expect(session.topics.isEmpty)
     }
 
     @Test func connectFailureSetsError() async {
@@ -86,5 +89,8 @@ struct ROSSessionTests {
         #expect(ROSSession.robotName(in: "<robot name=\"ur30\">") == "ur30")
         #expect(ROSSession.robotName(in: "<robot xmlns:xacro=\"x\" name=\"crx20ia_l\">") == "crx20ia_l")
         #expect(ROSSession.robotName(in: "<link name=\"base\"/>") == nil)
+        // `filename=` must not be mistaken for `name=`
+        #expect(ROSSession.robotName(in: "<robot filename=\"ur10e.urdf\" name=\"ur10e\">") == "ur10e")
+        #expect(ROSSession.robotName(in: "<robot filename=\"x\">") == nil)
     }
 }

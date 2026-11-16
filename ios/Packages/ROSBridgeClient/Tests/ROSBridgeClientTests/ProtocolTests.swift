@@ -40,35 +40,45 @@ struct ProtocolTests {
     }
 
     @Test func recordedJointStateDecodesToMessage() throws {
-        let frame = try IncomingFrame.decode(Fixtures.text("publish_joint_states"))
-        let js = try #require(frame.msg).decode(as: SensorMsgs.JointState.self)
+        let data = Data(try Fixtures.text("publish_joint_states").utf8)
+        #expect(try IncomingFrame.decode(data).knownOp == .publish)
+        let js = try ROSJSON.decode(PublishEnvelope<SensorMsgs.JointState>.self, from: data).msg
         #expect(js.name == ["J1", "J2", "J3", "J4", "J5", "J6"])
         #expect(js.position.count == 6)
     }
 
     @Test func recordedTFDecodesToMessage() throws {
-        let frame = try IncomingFrame.decode(Fixtures.text("publish_tf"))
-        let tf = try #require(frame.msg).decode(as: TF2Msgs.TFMessage.self)
+        let data = Data(try Fixtures.text("publish_tf").utf8)
+        let tf = try ROSJSON.decode(PublishEnvelope<TF2Msgs.TFMessage>.self, from: data).msg
         #expect(tf.transforms.count == 6)
         #expect(tf.transforms.first?.header.frameId == "base_link")
         #expect(tf.transforms.first?.childFrameId == "J1_link")
     }
 
     @Test func recordedRobotDescriptionIsURDF() throws {
-        let frame = try IncomingFrame.decode(Fixtures.text("publish_robot_description"))
-        let s = try #require(frame.msg).decode(as: StdMsgs.StringMessage.self)
+        let data = Data(try Fixtures.text("publish_robot_description").utf8)
+        let s = try ROSJSON.decode(PublishEnvelope<StdMsgs.StringMessage>.self, from: data).msg
         #expect(s.data.contains("<robot name=\"crx30ia\""))
     }
 
     @Test func recordedServiceErrorHasStringValues() throws {
-        let frame = try IncomingFrame.decode(Fixtures.text("status_or_error_response"))
+        let data = Data(try Fixtures.text("status_or_error_response").utf8)
+        let frame = try IncomingFrame.decode(data)
         #expect(frame.result == false)
-        #expect(frame.values?.stringValue?.contains("does not exist") == true)
+        let values = try JSONDecoder().decode(ServiceValuesFrame.self, from: data).values
+        #expect(values?.stringValue?.contains("does not exist") == true)
+    }
+
+    @Test func statusFrameCarriesMessage() throws {
+        let data = Data(#"{"op":"status","level":"error","msg":"boom"}"#.utf8)
+        #expect(try IncomingFrame.decode(data).knownOp == .status)
+        #expect(try JSONDecoder().decode(StatusFrame.self, from: data).msg == "boom")
     }
 
     @Test func topicsResponseZipsNamesAndTypes() throws {
-        let frame = try IncomingFrame.decode(Fixtures.text("service_response_topics"))
-        let r = try #require(frame.values).decode(as: TopicsResponse.self)
+        let data = Data(try Fixtures.text("service_response_topics").utf8)
+        let values = try #require(try JSONDecoder().decode(ServiceValuesFrame.self, from: data).values)
+        let r = try values.decode(as: TopicsResponse.self)
         #expect(r.infos.contains(TopicInfo(name: "/joint_states", type: "sensor_msgs/msg/JointState")))
         #expect(r.infos.count == 8)
     }

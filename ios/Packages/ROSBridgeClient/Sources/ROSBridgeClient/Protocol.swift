@@ -68,7 +68,9 @@ enum OutgoingOp: Encodable, Sendable {
     }
 }
 
-/// Server → client frame. Only the fields the client routes on are typed; payloads stay `JSONValue`.
+/// Server → client routing envelope. Payload fields (`msg`, `values`) are deliberately NOT
+/// decoded here: JSONDecoder skips unknown keys, so this stays one cheap pass; subscribers
+/// then decode `PublishEnvelope<T>` straight from the same bytes (one parse per subscriber).
 struct IncomingFrame: Decodable, Sendable {
     enum Op: String, Decodable, Sendable {
         case publish
@@ -81,24 +83,37 @@ struct IncomingFrame: Decodable, Sendable {
     let id: String?
     let topic: String?
     let service: String?
-    /// `publish`: the message object. `status`: a human-readable string.
-    let msg: JSONValue?
-    /// `service_response`: the response object on success, or an error string on failure.
-    let values: JSONValue?
     let result: Bool?
     let level: String?
 
-    var knownOp: Op? {
-        Op(rawValue: op)
-    }
+    var knownOp: Op? { Op(rawValue: op) }
 
-    static func decode(_ text: String) throws -> IncomingFrame {
+    static func decode(_ data: Data) throws -> IncomingFrame {
         do {
-            return try JSONDecoder().decode(IncomingFrame.self, from: Data(text.utf8))
+            return try JSONDecoder().decode(IncomingFrame.self, from: data)
         } catch {
             throw RosbridgeError.decoding("frame: \(error)")
         }
     }
+
+    static func decode(_ text: String) throws -> IncomingFrame {
+        try decode(Data(text.utf8))
+    }
+}
+
+/// `publish` frame with the message decoded as `T` (snake_case keys via `ROSJSON`).
+struct PublishEnvelope<T: Decodable>: Decodable {
+    let msg: T
+}
+
+/// `service_response`: object on success, error string on failure.
+struct ServiceValuesFrame: Decodable {
+    let values: JSONValue?
+}
+
+/// `status`: human-readable message.
+struct StatusFrame: Decodable {
+    let msg: String?
 }
 
 /// `/rosapi/topics` response.

@@ -14,6 +14,7 @@ import os
 import socket
 import sys
 import time
+from collections.abc import Callable
 
 import aiohttp
 
@@ -47,7 +48,9 @@ def save(name: str, obj: dict) -> None:
     print(f"wrote {os.path.relpath(path)}  ({len(json.dumps(obj))} bytes)")
 
 
-async def recv_until(ws, pred, timeout=15):
+async def recv_until(
+    ws: aiohttp.ClientWebSocketResponse, pred: Callable[[dict], bool], timeout: float = 15
+) -> dict:
     deadline = time.time() + timeout
     while time.time() < deadline:
         m = await ws.receive(timeout=deadline - time.time())
@@ -78,27 +81,48 @@ async def main() -> None:
         await ws.send_json(sub)
         save(
             "publish_joint_states",
-            await recv_until(ws, lambda d: d.get("op") == "publish" and d["topic"] == "/joint_states"),
+            await recv_until(
+                ws, lambda d: d.get("op") == "publish" and d["topic"] == "/joint_states"
+            ),
         )
         await ws.send_json({"op": "unsubscribe", "topic": "/joint_states", "id": "sub_js"})
 
         # 3. /tf (dynamic) and /tf_static (latched)
         for topic, name in (("/tf", "publish_tf"), ("/tf_static", "publish_tf_static")):
             await ws.send_json(
-                {"op": "subscribe", "topic": topic, "type": "tf2_msgs/msg/TFMessage", "id": "sub" + topic}
+                {
+                    "op": "subscribe",
+                    "topic": topic,
+                    "type": "tf2_msgs/msg/TFMessage",
+                    "id": "sub" + topic,
+                }
             )
-            save(name, await recv_until(ws, lambda d, t=topic: d.get("op") == "publish" and d["topic"] == t))
+            save(
+                name,
+                await recv_until(
+                    ws, lambda d, t=topic: d.get("op") == "publish" and d["topic"] == t
+                ),
+            )
             await ws.send_json({"op": "unsubscribe", "topic": topic, "id": "sub" + topic})
 
         # 4. /robot_description (transient_local) — rosbridge should match publisher durability
         await ws.send_json(
-            {"op": "subscribe", "topic": "/robot_description", "type": "std_msgs/msg/String", "id": "sub_rd"}
+            {
+                "op": "subscribe",
+                "topic": "/robot_description",
+                "type": "std_msgs/msg/String",
+                "id": "sub_rd",
+            }
         )
         try:
             rd = await recv_until(
-                ws, lambda d: d.get("op") == "publish" and d["topic"] == "/robot_description", timeout=10
+                ws,
+                lambda d: d.get("op") == "publish" and d["topic"] == "/robot_description",
+                timeout=10,
             )
-            rd["msg"]["data"] = rd["msg"]["data"][:2000] + "\n<!-- truncated for fixture -->\n</robot>"
+            rd["msg"]["data"] = (
+                rd["msg"]["data"][:2000] + "\n<!-- truncated for fixture -->\n</robot>"
+            )
             save("publish_robot_description", rd)
         except TimeoutError:
             print("WARNING: /robot_description not received via subscribe (durability mismatch?)")
@@ -118,7 +142,9 @@ async def main() -> None:
         if resp.get("result") and resp["values"]["values"]:
             v = resp["values"]["values"][0]
             if v.get("string_value"):
-                v["string_value"] = v["string_value"][:2000] + "\n<!-- truncated for fixture -->\n</robot>"
+                v["string_value"] = (
+                    v["string_value"][:2000] + "\n<!-- truncated for fixture -->\n</robot>"
+                )
         save("service_response_get_parameters", resp)
 
         # 6. a status error (unknown service)
@@ -132,7 +158,10 @@ async def main() -> None:
         await ws.send_json(
             {"op": "call_service", "service": "/rosapi/get_topics_and_raw_types", "id": "svc_types"}
         )
-        save("service_response_topics_and_raw_types", await recv_until(ws, lambda d: d.get("id") == "svc_types"))
+        save(
+            "service_response_topics_and_raw_types",
+            await recv_until(ws, lambda d: d.get("id") == "svc_types"),
+        )
 
 
 asyncio.run(main())

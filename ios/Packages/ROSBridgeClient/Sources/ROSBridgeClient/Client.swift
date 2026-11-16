@@ -43,11 +43,8 @@ public struct ReconnectPolicy: Sendable {
     public static let none = ReconnectPolicy(enabled: false)
 
     func delay(forAttempt attempt: Int) -> Duration {
-        func secs(_ d: Duration) -> Double {
-            Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
-        }
-        let scaled = secs(initialDelay) * pow(multiplier, Double(max(0, attempt - 1)))
-        return .seconds(min(scaled, secs(maxDelay)))
+        let scaled = (initialDelay / .seconds(1)) * pow(multiplier, Double(max(0, attempt - 1)))
+        return .seconds(min(scaled, maxDelay / .seconds(1)))
     }
 }
 
@@ -82,7 +79,13 @@ public struct Subscription<T: ROSMessage>: Sendable {
 }
 
 /// rosbridge v2 client: subscriptions, publishing, service calls, automatic reconnect with
-/// re-subscription. All state lives in the actor; consumers get `AsyncStream`s.
+/// re-subscription, heartbeat. All state lives in the actor; consumers get `AsyncStream`s.
+///
+/// Lifecycle invariants:
+/// - `generation` increments on every `connect()`/`disconnect()`. Any transport opened for an
+///   older generation is closed and discarded when its handshake finally returns.
+/// - Loops (receive, heartbeat) are bound to their transport and only report loss while that
+///   transport is still the current one (`transport === t`).
 public actor RosbridgeClient {
     public typealias TransportFactory = @Sendable (URL) -> any WebSocketTransport
 
@@ -97,6 +100,7 @@ public actor RosbridgeClient {
     private var heartbeatTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
     private var userDisconnected = true
+    private var generation = 0
     private var nextId = 0
 
     public private(set) var state: ConnectionState = .disconnected {
@@ -115,7 +119,8 @@ public actor RosbridgeClient {
         let type: String
         let throttleRate: Int
         let queueLength: Int
-        let sink: @Sendable (JSONValue) -> Void
+        /// Receives the raw frame bytes; decodes `msg` as its own `T` (one parse per subscriber).
+        let sink: @Sendable (Data) -> Void
         let finish: @Sendable () -> Void
     }
 
@@ -159,35 +164,49 @@ public actor RosbridgeClient {
         userDisconnected = false
         state = .connecting
         do {
-            try await openTransport(url)
+            try await openAndRegister(url)
         } catch {
-            state = .failed(describe(error))
+            if !userDisconnected {
+                state = .failed(describe(error))
+            }
             throw error
         }
-        try await resendRegistrations()
         state = .connected
         log.info("connected to \(url.absoluteString, privacy: .public)")
     }
 
     public func disconnect() async {
         userDisconnected = true
+        generation += 1
         reconnectTask?.cancel()
         reconnectTask = nil
-        receiveTask?.cancel()
-        receiveTask = nil
-        heartbeatTask?.cancel()
-        heartbeatTask = nil
-        if let t = transport {
-            await t.close()
-        }
-        transport = nil
+        await teardownTransport()
         failAllPending(RosbridgeError.connectionClosed)
         state = .disconnected
     }
 
+    /// Opens a transport for the current generation and re-sends registrations. On any failure
+    /// the transport (if opened) is torn down so nothing is left running.
+    private func openAndRegister(_ url: URL) async throws {
+        try await openTransport(url)
+        do {
+            try await resendRegistrations()
+        } catch {
+            await teardownTransport()
+            throw error
+        }
+    }
+
     private func openTransport(_ url: URL) async throws {
+        let myGeneration = generation
         let t = makeTransport(url)
         try await t.connect()
+        // While we were handshaking the user may have called connect()/disconnect().
+        guard myGeneration == generation, !userDisconnected else {
+            await t.close()
+            throw RosbridgeError.connectionClosed
+        }
+        await teardownTransport() // never stack transports
         transport = t
         receiveTask = Task { [weak self] in
             await self?.receiveLoop(t)
@@ -195,6 +214,32 @@ public actor RosbridgeClient {
         if heartbeat.enabled {
             heartbeatTask = Task { [weak self] in
                 await self?.heartbeatLoop(t)
+            }
+        }
+    }
+
+    private func teardownTransport() async {
+        receiveTask?.cancel()
+        receiveTask = nil
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        if let t = transport {
+            transport = nil
+            await t.close()
+        }
+    }
+
+    private func receiveLoop(_ t: any WebSocketTransport) async {
+        while !Task.isCancelled {
+            do {
+                let text = try await t.receive()
+                guard transport === t else { return }
+                handle(text)
+            } catch {
+                if !Task.isCancelled {
+                    await connectionLost(t, error)
+                }
+                return
             }
         }
     }
@@ -208,10 +253,10 @@ public actor RosbridgeClient {
             } catch {
                 return
             }
-            guard !Task.isCancelled, !userDisconnected else { return }
+            guard !Task.isCancelled, transport === t else { return }
             let alive = await Self.ping(t, timeout: heartbeat.timeout)
             if !alive, !Task.isCancelled {
-                await connectionLost(RosbridgeError.timeout("heartbeat"))
+                await connectionLost(t, RosbridgeError.timeout("heartbeat"))
                 return
             }
         }
@@ -230,44 +275,26 @@ public actor RosbridgeClient {
         }
     }
 
-    private func receiveLoop(_ t: any WebSocketTransport) async {
-        while !Task.isCancelled {
-            do {
-                let text = try await t.receive()
-                handle(text)
-            } catch {
-                if !userDisconnected {
-                    await connectionLost(error)
-                }
-                return
-            }
-        }
-    }
-
-    private func connectionLost(_ error: Error) async {
-        // The receive loop and the heartbeat can both report the same loss; first one wins.
-        guard let old = transport else { return }
+    /// Only the *current* transport may report a loss; stale loops from replaced sockets are ignored.
+    private func connectionLost(_ t: any WebSocketTransport, _ error: Error) async {
+        guard transport === t, !userDisconnected else { return }
         log.error("connection lost: \(self.describe(error), privacy: .public)")
-        transport = nil
-        receiveTask?.cancel()
-        receiveTask = nil
-        heartbeatTask?.cancel()
-        heartbeatTask = nil
-        await old.close() // tear the dead socket down before any reconnect attempt
+        await teardownTransport()
         failAllPending(RosbridgeError.connectionClosed)
         guard policy.enabled, let url else {
             state = .failed(describe(error))
             return
         }
         state = .reconnecting(attempt: 1)
+        let gen = generation
         reconnectTask = Task { [weak self] in
-            await self?.reconnectLoop(url)
+            await self?.reconnectLoop(url, generation: gen)
         }
     }
 
-    private func reconnectLoop(_ url: URL) async {
+    private func reconnectLoop(_ url: URL, generation gen: Int) async {
         var attempt = 1
-        while !Task.isCancelled, !userDisconnected {
+        while !Task.isCancelled, !userDisconnected, gen == generation {
             if let max = policy.maxAttempts, attempt > max {
                 state = .failed("gave up after \(max) attempts")
                 return
@@ -278,13 +305,17 @@ public actor RosbridgeClient {
             } catch {
                 return // cancelled
             }
+            guard gen == generation, !userDisconnected else { return }
             do {
-                try await openTransport(url)
-                try await resendRegistrations()
+                try await openAndRegister(url)
+                guard gen == generation else { return } // superseded while handshaking
                 state = .connected
                 log.info("reconnected after \(attempt) attempt(s)")
                 return
             } catch {
+                if gen != generation || userDisconnected {
+                    return
+                }
                 log.warning("reconnect attempt \(attempt) failed: \(self.describe(error), privacy: .public)")
                 attempt += 1
             }
@@ -318,9 +349,9 @@ public actor RosbridgeClient {
         let log = log
         let entry = SubscriptionEntry(
             topic: topic, type: T.rosType, throttleRate: throttleMilliseconds, queueLength: queueLength,
-            sink: { value in
+            sink: { data in
                 do {
-                    try cont.yield(value.decode(as: T.self))
+                    try cont.yield(ROSJSON.decode(PublishEnvelope<T>.self, from: data).msg)
                 } catch {
                     log
                         .error(
@@ -427,32 +458,34 @@ public actor RosbridgeClient {
     }
 
     private func handle(_ text: String) {
+        let data = Data(text.utf8)
         let frame: IncomingFrame
         do {
-            frame = try IncomingFrame.decode(text)
+            frame = try IncomingFrame.decode(data)
         } catch {
             log.error("bad frame: \(String(describing: error), privacy: .public)")
             return
         }
         switch frame.knownOp {
         case .publish:
-            guard let topic = frame.topic, let msg = frame.msg else { return }
+            guard let topic = frame.topic else { return }
             for entry in subscriptions.values where entry.topic == topic {
-                entry.sink(msg)
+                entry.sink(data)
             }
         case .serviceResponse:
             guard let id = frame.id, let cont = pendingServices.removeValue(forKey: id) else { return }
+            let values = (try? JSONDecoder().decode(ServiceValuesFrame.self, from: data))?.values
             if frame.result == false {
-                let message = frame.values?.stringValue ?? "unknown error"
+                let message = values?.stringValue ?? "unknown error"
                 cont.resume(throwing: RosbridgeError.serviceFailed(
                     service: frame.service ?? "?", message: message
                 ))
             } else {
-                cont.resume(returning: frame.values ?? .null)
+                cont.resume(returning: values ?? .null)
             }
         case .status:
             let level = frame.level ?? "info"
-            let message = frame.msg?.stringValue ?? text
+            let message = (try? JSONDecoder().decode(StatusFrame.self, from: data))?.msg ?? text
             log.log(
                 level: level == "error" ? .error : .info,
                 "rosbridge status: \(message, privacy: .public)"

@@ -10,6 +10,8 @@ public actor MockWebSocketTransport: WebSocketTransport {
     public private(set) var connectAttempts = 0
     public var failConnect = false
     public var failPing = false
+    public private(set) var closeCount = 0
+    private var connectDelay: Duration?
 
     private var queue: [String] = []
     private var waiters: [CheckedContinuation<String, Error>] = []
@@ -19,6 +21,9 @@ public actor MockWebSocketTransport: WebSocketTransport {
 
     public func connect() async throws {
         connectAttempts += 1
+        if let connectDelay {
+            try await Task.sleep(for: connectDelay)
+        }
         if failConnect {
             throw RosbridgeError.transport("mock refused")
         }
@@ -47,6 +52,7 @@ public actor MockWebSocketTransport: WebSocketTransport {
     }
 
     public func close() async {
+        closeCount += 1
         dropConnection()
     }
 
@@ -69,6 +75,11 @@ public actor MockWebSocketTransport: WebSocketTransport {
         for c in w {
             c.resume(throwing: Closed())
         }
+    }
+
+    /// Make `connect()` take this long (simulates a slow or hanging handshake).
+    public func setConnectDelay(_ d: Duration?) {
+        connectDelay = d
     }
 
     public func setFailConnect(_ v: Bool) {
