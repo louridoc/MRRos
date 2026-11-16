@@ -9,7 +9,7 @@ private let jointStatesFrame = """
  "name":["J1","J2"],"position":[0.25,-0.5],"velocity":[],"effort":[]}}
 """
 private let robotDescriptionFrame = """
-{"op":"publish","topic":"/robot_description","msg":{"data":"<?xml version=\\"1.0\\"?>\\n<robot name=\\"crx30ia\\" xmlns:xacro=\\"x\\">\\n</robot>"}}
+{"op":"publish","topic":"/robot_description","msg":{"data":"<?xml version=\\"1.0\\"?>\\n<robot name=\\"crx30ia\\" xmlns:xacro=\\"x\\"><link name=\\"base_link\\"/></robot>"}}
 """
 
 @MainActor
@@ -60,12 +60,15 @@ struct ROSSessionTests {
         }
         #expect(session.jointState?.positionsByName["J2"] == -0.5)
         #expect(session.robotName == "crx30ia")
+        #expect(session.urdfRobot?.rootLink == "base_link")
+        #expect(session.urdfError == nil)
 
         await session.disconnect()
         #expect(session.state == .disconnected)
         #expect(session.jointState == nil)
         #expect(session.robotName == nil, "previous bridge's identity must not survive a disconnect")
         #expect(session.urdf == nil)
+        #expect(session.urdfRobot == nil)
         #expect(session.topics.isEmpty)
     }
 

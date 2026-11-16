@@ -41,6 +41,9 @@ targets:
       - package: AppCore
       - package: ROSBridgeClient
       - package: ROSMessages
+      - package: RobotModel
+      - package: URDFKit
+      - package: MeshProvider
     info:
       path: MRRos/Info.plist
       properties:

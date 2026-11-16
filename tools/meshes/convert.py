@@ -4,7 +4,8 @@ fixtures, converted to USDZ with Apple's SceneKit, plus a manifest the app uses 
 
 Output (committed):
   ios/MRRos/Meshes/<package>/<relative path>.usdz
-  ios/MRRos/Meshes/meshes.json   — {"version", "generated", "entries": [{uri, file, sha256, bytes, tris, bbox, source}]}
+  ios/MRRos/Meshes/meshes.json   — {"version", "generated", "robots", "entries": [...]}
+    entry: {uri, file, sha256, bytes, tris, bbox, source, via}
 
 Usage: tools/meshes/convert.py [robot ...]     (default: the five priority robots)
 Source packages are resolved from the Jazzy env share dir and the built ros2_ws install.
@@ -56,12 +57,37 @@ def source_version(path: str) -> str:
     return "unknown"
 
 
+def reexport_with_trimesh(src: str, workdir: str) -> str:
+    """Some vendor DAEs carry malformed faces that break SceneKit's exporter. trimesh drops them;
+    the scene is written as OBJ (+MTL, per-geometry colours kept) for SceneKit to convert."""
+    import trimesh  # only needed for the fallback; lives in the ROS env
+
+    scene = trimesh.load(src, force="scene")
+    out = os.path.join(workdir, os.path.splitext(os.path.basename(src))[0] + ".obj")
+    scene.export(out)
+    return out
+
+
 def sha256(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def run_converter(jobs: list[dict], workdir: str) -> list[dict]:
+    if not jobs:
+        return []
+    jobs_path = os.path.join(workdir, f"jobs-{len(jobs)}.json")
+    with open(jobs_path, "w") as f:
+        json.dump(jobs, f)
+    proc = subprocess.run(["swift", CONVERTER, jobs_path], capture_output=True, text=True)
+    results = [json.loads(line) for line in proc.stdout.splitlines() if line.startswith("{")]
+    if not results:
+        print(proc.stderr[-2000:])
+        raise SystemExit("converter produced no results")
+    return results
 
 
 def main() -> None:
@@ -83,27 +109,40 @@ def main() -> None:
         jobs.append({"src": src, "dst": dst})
         meta[dst] = {"uri": uri, "file": file, "sha256": sha256(src), "source": source_version(src)}
 
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-        json.dump(jobs, f)
-        jobs_path = f.name
-    proc = subprocess.run(["swift", CONVERTER, jobs_path], capture_output=True, text=True)
     entries = []
     failed = 0
-    for line in proc.stdout.splitlines():
-        if not line.startswith("{"):
-            continue
-        r = json.loads(line)
-        m = meta[r["dst"]]
-        if not r["ok"]:
-            failed += 1
-            print(f"FAIL {m['uri']}: {r.get('error')}")
-            continue
-        m.update(bytes=os.path.getsize(r["dst"]), tris=r["tris"], bbox=r["bbox"])
-        entries.append(m)
-        print(f"ok   {m['uri']} → {m['file']} ({m['bytes'] / 1e6:.2f} MB, {m['tris']} tris)")
-    if proc.returncode != 0 and not entries:
-        print(proc.stderr[-2000:])
-        raise SystemExit("converter failed")
+    with tempfile.TemporaryDirectory() as work:
+        results = run_converter(jobs, work)
+        retry = []
+        for r in results:
+            m = meta[r["dst"]]
+            if r["ok"]:
+                m.update(
+                    bytes=os.path.getsize(r["dst"]), tris=r["tris"], bbox=r["bbox"], via="scenekit"
+                )
+                entries.append(m)
+                print(
+                    f"ok   {m['uri']} → {m['file']} ({m['bytes'] / 1e6:.2f} MB, {m['tris']} tris)"
+                )
+            else:
+                print(f"retry {m['uri']}: {r.get('error')} → re-exporting with trimesh")
+                src = next(j["src"] for j in jobs if j["dst"] == r["dst"])
+                retry.append({"src": reexport_with_trimesh(src, work), "dst": r["dst"]})
+        for r in run_converter(retry, work) if retry else []:
+            m = meta[r["dst"]]
+            if r["ok"]:
+                m.update(
+                    bytes=os.path.getsize(r["dst"]),
+                    tris=r["tris"],
+                    bbox=r["bbox"],
+                    via="trimesh-obj+scenekit",
+                )
+                entries.append(m)
+                mb = m["bytes"] / 1e6
+                print(f"ok   {m['uri']} → {m['file']} ({mb:.2f} MB, {m['tris']} tris, via trimesh)")
+            else:
+                failed += 1
+                print(f"FAIL {m['uri']}: {r.get('error')}")
 
     manifest = {
         "version": 1,
@@ -116,9 +155,8 @@ def main() -> None:
         json.dump(manifest, f, indent=1)
         f.write("\n")
     total = sum(e["bytes"] for e in entries)
-    print(
-        f"\n{len(entries)} converted, {failed} failed, {total / 1e6:.1f} MB → {os.path.relpath(OUT, ROOT)}/meshes.json"
-    )
+    rel = os.path.relpath(OUT, ROOT)
+    print(f"\n{len(entries)} converted, {failed} failed, {total / 1e6:.1f} MB → {rel}/meshes.json")
     if failed:
         raise SystemExit(1)
 

@@ -54,8 +54,10 @@ func convert(_ job: Job) -> Result {
             abs(bmx.y - mx.y),
             abs(bmx.z - mx.z)
         )
-        guard drift < 1e-3
-        else { return Result(dst: job.dst, ok: false, error: "bounds drifted by \(drift)") }
+        guard drift < 1e-3 else {
+            try? FileManager.default.removeItem(at: dst) // never leave a bad asset behind
+            return Result(dst: job.dst, ok: false, error: "bounds drifted by \(drift)")
+        }
         return Result(
             dst: job.dst, ok: true, tris: tris,
             bbox: [mn.x, mn.y, mn.z, mx.x, mx.y, mx.z].map(Double.init)

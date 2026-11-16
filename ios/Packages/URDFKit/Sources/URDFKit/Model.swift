@@ -54,6 +54,12 @@ public struct Material: Sendable, Equatable {
     /// RGBA in 0…1, if a `<color>` was given (inline or via a top-level `<material name>`).
     public var rgba: SIMD4<Double>?
     public var texture: String?
+
+    public init(name: String? = nil, rgba: SIMD4<Double>? = nil, texture: String? = nil) {
+        self.name = name
+        self.rgba = rgba
+        self.texture = texture
+    }
 }
 
 /// `<visual>` or `<collision>`.

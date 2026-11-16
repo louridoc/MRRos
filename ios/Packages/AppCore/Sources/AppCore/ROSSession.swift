@@ -3,6 +3,7 @@ import Observation
 import os
 import ROSBridgeClient
 import ROSMessages
+import URDFKit
 
 /// Main-actor façade over `RosbridgeClient` for the UI: connection lifecycle, the live
 /// `/joint_states`, the robot description, and the topic list.
@@ -27,6 +28,9 @@ public final class ROSSession {
     public private(set) var lastJointUpdate: Date?
     public private(set) var robotName: String?
     public private(set) var urdf: String?
+    /// Parsed robot description (nil until a valid URDF arrived; see `urdfError`).
+    public private(set) var urdfRobot: URDFRobot?
+    public private(set) var urdfError: String?
 
     public var isConnected: Bool {
         state.isConnected
@@ -90,6 +94,8 @@ public final class ROSSession {
         lastJointUpdate = nil
         robotName = nil
         urdf = nil
+        urdfRobot = nil
+        urdfError = nil
         topics = []
         jointStamps.removeAll()
     }
@@ -125,7 +131,17 @@ public final class ROSSession {
             for await msg in sub.messages {
                 guard let self else { return }
                 urdf = msg.data
-                robotName = Self.robotName(in: msg.data)
+                do {
+                    let parsed = try URDFParser.parse(msg.data)
+                    urdfRobot = parsed
+                    urdfError = nil
+                    robotName = parsed.name.isEmpty ? Self.robotName(in: msg.data) : parsed.name
+                } catch {
+                    urdfRobot = nil
+                    urdfError = "\(error)"
+                    robotName = Self.robotName(in: msg.data)
+                    log.error("URDF parse failed: \(String(describing: error), privacy: .public)")
+                }
             }
         })
     }
