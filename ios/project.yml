@@ -35,6 +35,8 @@ targets:
       - path: MRRos
     dependencies:
       - package: AppCore
+      - package: ROSBridgeClient
+      - package: ROSMessages
     info:
       path: MRRos/Info.plist
       properties:

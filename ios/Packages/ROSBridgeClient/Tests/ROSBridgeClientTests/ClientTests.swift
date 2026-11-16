@@ -9,8 +9,8 @@ private let fastReconnect = ReconnectPolicy(
 )
 
 struct ClientTests {
-    private func makeClient(policy: ReconnectPolicy = fastReconnect) -> (RosbridgeClient, MockTransport) {
-        let mock = MockTransport()
+    private func makeClient(policy: ReconnectPolicy = fastReconnect) -> (RosbridgeClient, MockWebSocketTransport) {
+        let mock = MockWebSocketTransport()
         let client = RosbridgeClient(transportFactory: { _ in mock }, reconnect: policy)
         return (client, mock)
     }

@@ -1,0 +1,153 @@
+import Foundation
+import Observation
+import os
+import ROSBridgeClient
+import ROSMessages
+
+/// Main-actor façade over `RosbridgeClient` for the UI: connection lifecycle, the live
+/// `/joint_states`, the robot description, and the topic list.
+@MainActor
+@Observable
+public final class ROSSession {
+    public var settings: ConnectionSettings {
+        didSet {
+            if settings != oldValue {
+                settings.save(to: defaults)
+            }
+        }
+    }
+
+    public private(set) var state: ConnectionState = .disconnected
+    public private(set) var lastError: String?
+    public private(set) var topics: [TopicInfo] = []
+    public private(set) var jointState: SensorMsgs.JointState?
+    /// Measured `/joint_states` rate over the last ~1 s window.
+    public private(set) var jointRateHz: Double = 0
+    public private(set) var robotName: String?
+    public private(set) var urdf: String?
+
+    public var isConnected: Bool {
+        state.isConnected
+    }
+
+    private let client: RosbridgeClient
+    private let defaults: UserDefaults
+    private var tasks: [Task<Void, Never>] = []
+    private var jointStamps: [ContinuousClock.Instant] = []
+    private let log = Logger(subsystem: "io.github.louridoc.mrros", category: "AppCore")
+
+    public init(
+        transportFactory: RosbridgeClient.TransportFactory? = nil,
+        reconnect: ReconnectPolicy = .default,
+        defaults: UserDefaults = .standard
+    ) {
+        self.defaults = defaults
+        settings = ConnectionSettings.load(from: defaults)
+        if let transportFactory {
+            client = RosbridgeClient(transportFactory: transportFactory, reconnect: reconnect)
+        } else {
+            client = RosbridgeClient(reconnect: reconnect)
+        }
+    }
+
+    // MARK: - Lifecycle
+
+    public func connect() async {
+        guard let url = settings.url else {
+            lastError = "Invalid host or port"
+            return
+        }
+        lastError = nil
+        stopTasks()
+        tasks.append(Task { [weak self, client] in
+            for await s in await client.states() {
+                guard let self else { return }
+                state = s
+                if case let .failed(reason) = s {
+                    lastError = reason
+                }
+            }
+        })
+        do {
+            try await client.connect(to: url)
+        } catch {
+            lastError = (error as? RosbridgeError).map { "\($0)" } ?? error.localizedDescription
+            log.error("connect failed: \(self.lastError ?? "?", privacy: .public)")
+            return
+        }
+        startSubscriptions()
+        await refreshTopics()
+    }
+
+    public func disconnect() async {
+        stopTasks()
+        await client.disconnect()
+        state = .disconnected
+        jointState = nil
+        jointRateHz = 0
+        jointStamps.removeAll()
+    }
+
+    public func refreshTopics() async {
+        do {
+            topics = try await client.topics().sorted { $0.name < $1.name }
+        } catch {
+            lastError = "topics: \(error)"
+        }
+    }
+
+    // MARK: - Subscriptions
+
+    private func startSubscriptions() {
+        tasks.append(Task { [weak self, client] in
+            let sub = await client.subscribe(
+                "/joint_states",
+                as: SensorMsgs.JointState.self,
+                throttleMilliseconds: 33
+            )
+            defer { sub.cancel() }
+            for await js in sub.messages {
+                guard let self else { return }
+                jointState = js
+                noteJointStamp()
+            }
+        })
+        tasks.append(Task { [weak self, client] in
+            let sub = await client.subscribe("/robot_description", as: StdMsgs.StringMessage.self)
+            defer { sub.cancel() }
+            for await msg in sub.messages {
+                guard let self else { return }
+                urdf = msg.data
+                robotName = Self.robotName(in: msg.data)
+            }
+        })
+    }
+
+    private func stopTasks() {
+        for t in tasks {
+            t.cancel()
+        }
+        tasks.removeAll()
+    }
+
+    private func noteJointStamp() {
+        let now = ContinuousClock.now
+        jointStamps.append(now)
+        jointStamps.removeAll { now - $0 > .seconds(1) }
+        if jointStamps.count >= 2, let first = jointStamps.first {
+            let span = now - first
+            let seconds = Double(span.components.seconds) + Double(span.components.attoseconds) / 1e18
+            jointRateHz = seconds > 0 ? Double(jointStamps.count - 1) / seconds : 0
+        }
+    }
+
+    /// `<robot name="…">` from a URDF string, without a full XML parse (URDFKit does that in M2).
+    static func robotName(in urdf: String) -> String? {
+        guard let range = urdf.range(of: #"<robot\s+[^>]*name="([^"]+)""#, options: .regularExpression)
+        else { return nil }
+        let tag = urdf[range]
+        guard let q1 = tag.range(of: "name=\"")?.upperBound,
+              let q2 = tag[q1...].firstIndex(of: "\"") else { return nil }
+        return String(tag[q1 ..< q2])
+    }
+}
