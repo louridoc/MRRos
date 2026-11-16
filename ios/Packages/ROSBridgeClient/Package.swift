@@ -20,7 +20,8 @@ let package = Package(
         ),
         .testTarget(
             name: "ROSBridgeClientTests",
-            dependencies: ["ROSBridgeClient"]
+            dependencies: ["ROSBridgeClient"],
+            resources: [.copy("../Fixtures")]
         ),
     ]
 )

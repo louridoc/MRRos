@@ -1,0 +1,7 @@
+{
+ "id": "svc_bad",
+ "op": "service_response",
+ "result": false,
+ "service": "/does/not/exist",
+ "values": "Service /does/not/exist does not exist"
+}

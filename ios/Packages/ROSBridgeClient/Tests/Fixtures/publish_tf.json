@@ -1,0 +1,146 @@
+{
+ "msg": {
+  "transforms": [
+   {
+    "child_frame_id": "J1_link",
+    "header": {
+     "frame_id": "base_link",
+     "stamp": {
+      "nanosec": 556885000,
+      "sec": 1794799054
+     }
+    },
+    "transform": {
+     "rotation": {
+      "w": 0.9557211293491117,
+      "x": 0.0,
+      "y": 0.0,
+      "z": -0.2942738909853517
+     },
+     "translation": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.37
+     }
+    }
+   },
+   {
+    "child_frame_id": "J2_link",
+    "header": {
+     "frame_id": "J1_link",
+     "stamp": {
+      "nanosec": 556885000,
+      "sec": 1794799054
+     }
+    },
+    "transform": {
+     "rotation": {
+      "w": 0.9779364312013483,
+      "x": 0.0,
+      "y": -0.20890269631857433,
+      "z": 0.0
+     },
+     "translation": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+     }
+    }
+   },
+   {
+    "child_frame_id": "J3_link",
+    "header": {
+     "frame_id": "J2_link",
+     "stamp": {
+      "nanosec": 556885000,
+      "sec": 1794799054
+     }
+    },
+    "transform": {
+     "rotation": {
+      "w": 0.9997301811450356,
+      "x": 0.0,
+      "y": 0.02322853649531417,
+      "z": 0.0
+     },
+     "translation": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.95
+     }
+    }
+   },
+   {
+    "child_frame_id": "J4_link",
+    "header": {
+     "frame_id": "J3_link",
+     "stamp": {
+      "nanosec": 556885000,
+      "sec": 1794799054
+     }
+    },
+    "transform": {
+     "rotation": {
+      "w": 0.9847409448525826,
+      "x": -0.1740266402906261,
+      "y": 0.0,
+      "z": 0.0
+     },
+     "translation": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+     }
+    }
+   },
+   {
+    "child_frame_id": "J5_link",
+    "header": {
+     "frame_id": "J4_link",
+     "stamp": {
+      "nanosec": 556885000,
+      "sec": 1794799054
+     }
+    },
+    "transform": {
+     "rotation": {
+      "w": 0.9580151530128561,
+      "x": 0.0,
+      "y": -0.2867175728792254,
+      "z": 0.0
+     },
+     "translation": {
+      "x": 0.75,
+      "y": 0.0,
+      "z": 0.0
+     }
+    }
+   },
+   {
+    "child_frame_id": "J6_link",
+    "header": {
+     "frame_id": "J5_link",
+     "stamp": {
+      "nanosec": 556885000,
+      "sec": 1794799054
+     }
+    },
+    "transform": {
+     "rotation": {
+      "w": 0.9637940632949338,
+      "x": -0.2666477143300527,
+      "y": 0.0,
+      "z": 0.0
+     },
+     "translation": {
+      "x": 0.0,
+      "y": -0.185,
+      "z": 0.0
+     }
+    }
+   }
+  ]
+ },
+ "op": "publish",
+ "topic": "/tf"
+}
