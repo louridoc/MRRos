@@ -2,6 +2,7 @@
 
   ros2 launch ar_dev_bringup dev.launch.py robot:=crx30ia   # crx20ial ur30 ur20 ur10e ...
   ros2 launch ar_dev_bringup dev.launch.py robot:=ur30 rviz:=false frozen:=true
+  ros2 launch ar_dev_bringup dev.launch.py robot:=ur30 rviz:=false positions:="0.1,-0.5,0.3,0,0.2,1"
 
 Works unchanged on Humble, Jazzy and Lyrical; distro-specific bits belong in distro.py.
 """
@@ -41,6 +42,8 @@ def _setup(context, *args, **kwargs):
         output="screen",
     )
 
+    positions_arg = LaunchConfiguration("positions").perform(context).strip()
+    positions = [float(v) for v in positions_arg.split(",")] if positions_arg else [0.0]
     mock = Node(
         package="ar_dev_bringup",
         executable="mock_joints",
@@ -48,6 +51,7 @@ def _setup(context, *args, **kwargs):
             {
                 "joint_names": list(spec.joint_names),
                 "frozen": LaunchConfiguration("frozen"),
+                "positions": positions,
             }
         ],
         output="screen",
@@ -84,6 +88,11 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("robot", default_value=DEFAULT_ROBOT, choices=sorted(ROBOTS)),
             DeclareLaunchArgument("rviz", default_value="true"),
             DeclareLaunchArgument("frozen", default_value="false"),
+            DeclareLaunchArgument(
+                "positions",
+                default_value="",
+                description="comma-separated constant joint positions",
+            ),
             DeclareLaunchArgument("rosbridge_port", default_value="9090"),
             OpaqueFunction(function=_setup),
         ]

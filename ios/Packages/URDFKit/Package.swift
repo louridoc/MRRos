@@ -8,17 +8,22 @@ let package = Package(
         .library(name: "URDFKit", targets: ["URDFKit"]),
     ],
     dependencies: [
+        // test-only: decoding the recorded /tf and /joint_states fixtures
+        .package(path: "../ROSMessages"),
     ],
     targets: [
         .target(
             name: "URDFKit",
-            dependencies: [
-            ],
+            dependencies: [],
             swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
         ),
         .testTarget(
             name: "URDFKitTests",
-            dependencies: ["URDFKit"]
+            dependencies: [
+                "URDFKit",
+                .product(name: "ROSMessages", package: "ROSMessages"),
+            ],
+            resources: [.copy("../Fixtures")]
         ),
     ]
 )
