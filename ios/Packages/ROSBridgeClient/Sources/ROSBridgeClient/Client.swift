@@ -51,6 +51,23 @@ public struct ReconnectPolicy: Sendable {
     }
 }
 
+/// Liveness probing. A half-open TCP connection (peer's Wi-Fi dropped, cable pulled) delivers no
+/// error for minutes; a missed websocket pong turns it into a `connectionLost` quickly.
+public struct HeartbeatPolicy: Sendable {
+    public var enabled: Bool
+    public var interval: Duration
+    public var timeout: Duration
+
+    public init(enabled: Bool = true, interval: Duration = .seconds(2), timeout: Duration = .seconds(3)) {
+        self.enabled = enabled
+        self.interval = interval
+        self.timeout = timeout
+    }
+
+    public static let `default` = HeartbeatPolicy()
+    public static let none = HeartbeatPolicy(enabled: false)
+}
+
 /// A live topic subscription. Messages arrive on `messages`; `cancel()` (or dropping the stream)
 /// unsubscribes on the bridge.
 public struct Subscription<T: ROSMessage>: Sendable {
@@ -71,11 +88,13 @@ public actor RosbridgeClient {
 
     private let makeTransport: TransportFactory
     private let policy: ReconnectPolicy
+    private let heartbeat: HeartbeatPolicy
     private let log = Logger(subsystem: "io.github.louridoc.mrros", category: "ROSBridgeClient")
 
     private var url: URL?
     private var transport: (any WebSocketTransport)?
     private var receiveTask: Task<Void, Never>?
+    private var heartbeatTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
     private var userDisconnected = true
     private var nextId = 0
@@ -106,10 +125,12 @@ public actor RosbridgeClient {
 
     public init(
         transportFactory: @escaping TransportFactory = { URLSessionWebSocketTransport(url: $0) },
-        reconnect: ReconnectPolicy = .default
+        reconnect: ReconnectPolicy = .default,
+        heartbeat: HeartbeatPolicy = .default
     ) {
         makeTransport = transportFactory
         policy = reconnect
+        self.heartbeat = heartbeat
     }
 
     // MARK: - Connection
@@ -154,6 +175,8 @@ public actor RosbridgeClient {
         reconnectTask = nil
         receiveTask?.cancel()
         receiveTask = nil
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
         if let t = transport {
             await t.close()
         }
@@ -169,6 +192,42 @@ public actor RosbridgeClient {
         receiveTask = Task { [weak self] in
             await self?.receiveLoop(t)
         }
+        if heartbeat.enabled {
+            heartbeatTask = Task { [weak self] in
+                await self?.heartbeatLoop(t)
+            }
+        }
+    }
+
+    /// Pings on a fixed cadence; a pong that does not arrive within `heartbeat.timeout` is treated
+    /// exactly like a socket error. Each transport gets its own loop, so stale loops die with it.
+    private func heartbeatLoop(_ t: any WebSocketTransport) async {
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: heartbeat.interval)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, !userDisconnected else { return }
+            let alive = await Self.ping(t, timeout: heartbeat.timeout)
+            if !alive, !Task.isCancelled {
+                await connectionLost(RosbridgeError.timeout("heartbeat"))
+                return
+            }
+        }
+    }
+
+    private static func ping(_ t: any WebSocketTransport, timeout: Duration) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await (try? t.ping()) != nil }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
     }
 
     private func receiveLoop(_ t: any WebSocketTransport) async {
@@ -178,17 +237,23 @@ public actor RosbridgeClient {
                 handle(text)
             } catch {
                 if !userDisconnected {
-                    connectionLost(error)
+                    await connectionLost(error)
                 }
                 return
             }
         }
     }
 
-    private func connectionLost(_ error: Error) {
+    private func connectionLost(_ error: Error) async {
+        // The receive loop and the heartbeat can both report the same loss; first one wins.
+        guard let old = transport else { return }
         log.error("connection lost: \(self.describe(error), privacy: .public)")
         transport = nil
+        receiveTask?.cancel()
         receiveTask = nil
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        await old.close() // tear the dead socket down before any reconnect attempt
         failAllPending(RosbridgeError.connectionClosed)
         guard policy.enabled, let url else {
             state = .failed(describe(error))

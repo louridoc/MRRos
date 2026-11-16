@@ -9,7 +9,9 @@ private let fastReconnect = ReconnectPolicy(
 )
 
 struct ClientTests {
-    private func makeClient(policy: ReconnectPolicy = fastReconnect) -> (RosbridgeClient, MockWebSocketTransport) {
+    private func makeClient(policy: ReconnectPolicy = fastReconnect)
+        -> (RosbridgeClient, MockWebSocketTransport)
+    {
         let mock = MockWebSocketTransport()
         let client = RosbridgeClient(transportFactory: { _ in mock }, reconnect: policy)
         return (client, mock)
@@ -156,6 +158,52 @@ struct ClientTests {
         try await mock.push(Fixtures.text("publish_tf"))
         var it = sub.messages.makeAsyncIterator()
         #expect(await it.next()?.transforms.count == 6)
+        await client.disconnect()
+    }
+
+    /// Half-open socket: nothing arrives and nothing errors, only pongs stop. The heartbeat must
+    /// turn that into a reconnect, and the subscription must come back afterwards.
+    @Test func heartbeatDetectsSilentDrop() async throws {
+        let mock = MockWebSocketTransport()
+        // Reconnect delay is deliberately longer than the heartbeat so the test can restore pongs
+        // after observing `.reconnecting` and before the first retry (otherwise the retry itself
+        // times out again and we count an extra subscribe).
+        let client = RosbridgeClient(
+            transportFactory: { _ in mock },
+            reconnect: ReconnectPolicy(initialDelay: .milliseconds(150), maxDelay: .milliseconds(150), maxAttempts: 5),
+            heartbeat: HeartbeatPolicy(interval: .milliseconds(20), timeout: .milliseconds(40))
+        )
+        try await client.connect(to: testURL)
+        let sub = await client.subscribe("/joint_states", as: SensorMsgs.JointState.self) // keep alive: dropping it unsubscribes
+        #expect(await mock.waitForSent(count: 1))
+        let states = await client.states()
+
+        await mock.setFailPing(true)
+        var sawReconnecting = false
+        for await s in states {
+            if case .reconnecting = s {
+                sawReconnecting = true
+                await mock.setFailPing(false) // network is back
+            }
+            if s == .connected, sawReconnecting {
+                break
+            }
+        }
+        #expect(await mock.connectAttempts == 2)
+        #expect(await mock.waitForSent(count: 2))
+        let subs = await mock.sentOps().filter { $0["op"]?.stringValue == "subscribe" }
+        #expect(subs.count == 2)
+        sub.cancel()
+        await client.disconnect()
+    }
+
+    @Test func heartbeatDisabledNeverPings() async throws {
+        let mock = MockWebSocketTransport()
+        let client = RosbridgeClient(transportFactory: { _ in mock }, reconnect: .none, heartbeat: .none)
+        try await client.connect(to: testURL)
+        await mock.setFailPing(true)
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(await client.state == .connected)
         await client.disconnect()
     }
 

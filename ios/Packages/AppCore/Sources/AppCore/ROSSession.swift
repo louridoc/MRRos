@@ -23,6 +23,8 @@ public final class ROSSession {
     public private(set) var jointState: SensorMsgs.JointState?
     /// Measured `/joint_states` rate over the last ~1 s window.
     public private(set) var jointRateHz: Double = 0
+    /// Wall-clock time of the last `/joint_states`; the UI flags the panel stale when this ages.
+    public private(set) var lastJointUpdate: Date?
     public private(set) var robotName: String?
     public private(set) var urdf: String?
 
@@ -85,6 +87,7 @@ public final class ROSSession {
         state = .disconnected
         jointState = nil
         jointRateHz = 0
+        lastJointUpdate = nil
         jointStamps.removeAll()
     }
 
@@ -109,6 +112,7 @@ public final class ROSSession {
             for await js in sub.messages {
                 guard let self else { return }
                 jointState = js
+                lastJointUpdate = Date()
                 noteJointStamp()
             }
         })

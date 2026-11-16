@@ -9,6 +9,7 @@ public actor MockWebSocketTransport: WebSocketTransport {
     public private(set) var sent: [String] = []
     public private(set) var connectAttempts = 0
     public var failConnect = false
+    public var failPing = false
 
     private var queue: [String] = []
     private var waiters: [CheckedContinuation<String, Error>] = []
@@ -41,6 +42,10 @@ public actor MockWebSocketTransport: WebSocketTransport {
         return try await withCheckedThrowingContinuation { waiters.append($0) }
     }
 
+    public func ping() async throws {
+        if closed || failPing { throw Closed() }
+    }
+
     public func close() async {
         dropConnection()
     }
@@ -68,6 +73,11 @@ public actor MockWebSocketTransport: WebSocketTransport {
 
     public func setFailConnect(_ v: Bool) {
         failConnect = v
+    }
+
+    /// Simulate a half-open socket: receive() keeps waiting but pongs never come back.
+    public func setFailPing(_ v: Bool) {
+        failPing = v
     }
 
     /// Outbound frames parsed as JSON.

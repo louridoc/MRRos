@@ -15,7 +15,10 @@ struct ContentView: View {
                     .padding(.top, 8)
                 Spacer()
                 if let js = session.jointState {
-                    JointsPanel(jointState: js, rateHz: session.jointRateHz, robotName: session.robotName)
+                    JointsPanel(
+                        jointState: js, rateHz: session.jointRateHz,
+                        robotName: session.robotName, lastUpdate: session.lastJointUpdate
+                    )
                         .padding(.horizontal)
                         .padding(.bottom, 16)
                         .transition(.move(edge: .bottom).combined(with: .opacity))

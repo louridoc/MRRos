@@ -8,6 +8,8 @@ public protocol WebSocketTransport: Sendable {
     func send(_ text: String) async throws
     /// Waits for the next text frame. Throws when the connection is gone.
     func receive() async throws -> String
+    /// Websocket ping; returns when the pong arrives, throws if the socket is dead.
+    func ping() async throws
     func close() async
 }
 
@@ -55,6 +57,19 @@ public actor URLSessionWebSocketTransport: WebSocketTransport {
         case let .string(s): return s
         case let .data(d): return String(decoding: d, as: UTF8.self)
         @unknown default: throw RosbridgeError.decoding("unknown websocket message kind")
+        }
+    }
+
+    public func ping() async throws {
+        guard let task else { throw RosbridgeError.notConnected }
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            task.sendPing { error in
+                if let error {
+                    cont.resume(throwing: RosbridgeError.transport(error.localizedDescription))
+                } else {
+                    cont.resume()
+                }
+            }
         }
     }
 
