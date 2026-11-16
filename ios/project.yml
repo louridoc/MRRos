@@ -33,6 +33,10 @@ targets:
     platform: iOS
     sources:
       - path: MRRos
+        excludes: [Meshes]
+      - path: MRRos/Meshes
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: AppCore
       - package: ROSBridgeClient
