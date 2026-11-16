@@ -1,0 +1,31 @@
+# macOS / Xcode
+.DS_Store
+*.xcodeproj/
+!*.xcodeproj/project.pbxproj.keep
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+.build/
+.swiftpm/
+*.xcresult
+ios/MRRos.xcodeproj/
+
+# Python / ROS 2
+__pycache__/
+*.pyc
+.venv/
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+ros2_ws/src/external/
+
+# Env / tooling
+.env
+.micromamba/
+node_modules/
+.ruff_cache/
+.pytest_cache/
+
+# Generated meshes (bundled USDZ are committed; intermediates are not)
+tools/meshes/work/
+

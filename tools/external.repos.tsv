@@ -1,0 +1,7 @@
+# Source-built external packages, pinned per ROS distro. Columns: distro  name  url  ref
+# `ref` may be a branch or a commit; tools/ros-build.sh checks it out before building.
+# fanuc_description publishes a single `main` branch (verified 2026-11-15); pin a commit per
+# distro here if a future change breaks an older distro.
+humble	fanuc_description	https://github.com/FANUC-CORPORATION/fanuc_description.git	main
+jazzy	fanuc_description	https://github.com/FANUC-CORPORATION/fanuc_description.git	main
+lyrical	fanuc_description	https://github.com/FANUC-CORPORATION/fanuc_description.git	main

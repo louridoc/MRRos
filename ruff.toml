@@ -1,0 +1,10 @@
+# py310 = Humble's Python; keeps the ROS packages runnable on all three supported distros.
+line-length = 100
+target-version = "py310"
+extend-exclude = ["ros2_ws/src/external", "ros2_ws/build", "ros2_ws/install"]
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[lint.isort]
+known-first-party = ["ar_bridge", "ar_dev_bringup"]

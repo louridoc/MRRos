@@ -1,0 +1,31 @@
+# RoboStack ROS 2 environment template. {{DISTRO}} ∈ humble | jazzy | lyrical.
+# Rendered + created by: tools/ros-env.sh create <distro>
+# Python version is left to the solver (3.10 on Humble, 3.12 on Jazzy/Lyrical).
+name: ros_{{DISTRO}}
+channels:
+  - robostack-{{DISTRO}}
+  - conda-forge
+dependencies:
+  - ros-{{DISTRO}}-desktop            # rclpy, rviz2, robot_state_publisher, tf2, common msgs
+  - ros-{{DISTRO}}-rosbridge-suite
+  - ros-{{DISTRO}}-ur-description
+  - ros-{{DISTRO}}-joint-state-publisher
+  - ros-{{DISTRO}}-joint-state-publisher-gui
+  - ros-{{DISTRO}}-xacro
+  - ros-{{DISTRO}}-sensor-msgs-py
+  # MoveIt is added in M5 with: tools/ros-env.sh add <distro> moveit
+  - colcon-common-extensions
+  - rosdep
+  - compilers
+  - cmake
+  - pkg-config
+  - make
+  - ninja
+  # ar_bridge runtime + mesh conversion + tests
+  - numpy
+  - trimesh
+  - pycollada
+  - aiohttp
+  - pytest
+  - pytest-asyncio
+  - ruff

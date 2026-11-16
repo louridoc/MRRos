@@ -1,0 +1,63 @@
+name: MRRos
+options:
+  bundleIdPrefix: io.github.louridoc.mrros
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "27.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+
+packages:
+  ROSMessages:       { path: Packages/ROSMessages }
+  ROSBridgeClient:   { path: Packages/ROSBridgeClient }
+  TFKit:             { path: Packages/TFKit }
+  URDFKit:           { path: Packages/URDFKit }
+  ARBridgeTransport: { path: Packages/ARBridgeTransport }
+  LiDARScan:         { path: Packages/LiDARScan }
+  AlignmentKit:      { path: Packages/AlignmentKit }
+  MeshProvider:      { path: Packages/MeshProvider }
+  RobotModel:        { path: Packages/RobotModel }
+  AppCore:           { path: Packages/AppCore }
+
+targets:
+  MRRos:
+    type: application
+    platform: iOS
+    sources:
+      - path: MRRos
+    dependencies:
+      - package: AppCore
+    info:
+      path: MRRos/Info.plist
+      properties:
+        CFBundleDisplayName: MRRos
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIRequiredDeviceCapabilities: [arkit, arm64]
+        NSCameraUsageDescription: Camera is used for augmented reality and LiDAR scanning.
+        NSLocalNetworkUsageDescription: Connects to the ROS 2 bridge on your local network.
+        NSBonjourServices: [_rosbridge._tcp, _mrros._tcp]
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.louridoc.mrros
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+
+schemes:
+  MRRos:
+    build:
+      targets: { MRRos: all }
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets: []

@@ -1,0 +1,69 @@
+name: ci
+
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  swift:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with: { xcode-version: latest-stable }
+      - name: Package tests (macOS)
+        run: tools/ios-test.sh
+      - name: Simulator build
+        run: |
+          brew install xcodegen
+          tools/ios-build.sh "iPhone 16 Pro" | tee build.log
+          grep -q "BUILD SUCCEEDED" build.log
+
+  ros:
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [humble, jazzy, lyrical]
+    runs-on: ubuntu-24.04
+    container: ros:${{ matrix.distro }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python deps
+        run: |
+          apt-get update && apt-get install -y python3-pip git netcat-openbsd
+          pip3 install aiohttp pytest pytest-asyncio ruff numpy 2>/dev/null \
+            || pip3 install --break-system-packages aiohttp pytest pytest-asyncio ruff numpy
+      - name: Lint
+        run: ruff check ros2_ws tools
+      - name: Unit tests
+        run: cd ros2_ws && pytest -q
+      - name: External sources for ${{ matrix.distro }}
+        run: |
+          while IFS=$'\t' read -r d name url ref; do
+            [ -z "$d" ] || [ "${d#\#}" != "$d" ] || [ "$d" != "${{ matrix.distro }}" ] && continue
+            git clone -q --branch "$ref" --depth 1 "$url" "ros2_ws/src/external/$name"
+          done < tools/external.repos.tsv
+      - name: Build
+        shell: bash
+        run: |
+          source /opt/ros/${{ matrix.distro }}/setup.bash
+          cd ros2_ws
+          rosdep update && rosdep install --from-paths src --ignore-src -y -r
+          colcon build --packages-up-to ar_dev_bringup ar_bridge
+      - name: Launch smoke test (every supported robot)
+        shell: bash
+        run: |
+          source /opt/ros/${{ matrix.distro }}/setup.bash
+          source ros2_ws/install/setup.bash
+          for robot in crx30ia crx20ial ur30 ur20 ur10e; do
+            echo "== $robot"
+            ros2 launch ar_dev_bringup dev.launch.py robot:=$robot rviz:=false frozen:=true > launch_$robot.log 2>&1 &
+            pid=$!
+            ok=0
+            for i in $(seq 1 30); do
+              if nc -z localhost 9090 && ros2 topic list | grep -q '^/robot_description$'; then ok=1; break; fi
+              sleep 1
+            done
+            kill $pid; wait $pid || true
+            [ $ok = 1 ] || { tail -40 launch_$robot.log; exit 1; }
+          done
