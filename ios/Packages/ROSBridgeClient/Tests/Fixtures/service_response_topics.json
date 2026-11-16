@@ -1,0 +1,28 @@
+{
+ "id": "svc_topics",
+ "op": "service_response",
+ "result": true,
+ "service": "/rosapi/topics",
+ "values": {
+  "topics": [
+   "/client_count",
+   "/connected_clients",
+   "/joint_states",
+   "/parameter_events",
+   "/robot_description",
+   "/rosout",
+   "/tf",
+   "/tf_static"
+  ],
+  "types": [
+   "std_msgs/msg/Int32",
+   "rosbridge_msgs/msg/ConnectedClients",
+   "sensor_msgs/msg/JointState",
+   "rcl_interfaces/msg/ParameterEvent",
+   "std_msgs/msg/String",
+   "rcl_interfaces/msg/Log",
+   "tf2_msgs/msg/TFMessage",
+   "tf2_msgs/msg/TFMessage"
+  ]
+ }
+}
