@@ -60,16 +60,41 @@ public actor URLSessionWebSocketTransport: WebSocketTransport {
         }
     }
 
+    /// Cancellation-aware: `sendPing`'s handler never fires on a half-open socket, so the caller's
+    /// timeout cancels us and we must resume then — otherwise a structured `withTaskGroup` around
+    /// this call would wait forever (that froze the heartbeat once).
     public func ping() async throws {
         guard let task else { throw RosbridgeError.notConnected }
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            task.sendPing { error in
-                if let error {
-                    cont.resume(throwing: RosbridgeError.transport(error.localizedDescription))
-                } else {
-                    cont.resume()
+        let box = ResumeOnce()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                box.store(cont)
+                task.sendPing { error in
+                    if let error {
+                        box.resume(.failure(RosbridgeError.transport(error.localizedDescription)))
+                    } else {
+                        box.resume(.success(()))
+                    }
                 }
             }
+        } onCancel: {
+            box.resume(.failure(RosbridgeError.timeout("ping")))
+        }
+    }
+
+    /// Holds a continuation that may be resumed from either the pong handler or cancellation.
+    private final class ResumeOnce: @unchecked Sendable {
+        private let lock = OSAllocatedUnfairLock<CheckedContinuation<Void, Error>?>(initialState: nil)
+        func store(_ c: CheckedContinuation<Void, Error>) {
+            lock.withLock { $0 = c }
+        }
+
+        func resume(_ r: Result<Void, Error>) {
+            let c = lock.withLock { s -> CheckedContinuation<Void, Error>? in
+                defer { s = nil }
+                return s
+            }
+            c?.resume(with: r)
         }
     }
 
