@@ -76,9 +76,8 @@ async def capture(robot: str) -> None:
                     f.write("\n")
     with open(os.path.join(out, "pose.json"), "w") as f:
         json.dump({"positions": POSE}, f)
-    print(
-        f"  wrote {os.path.relpath(out, ROOT)}/ (robot.urdf, tf_static.json, joint_states.json, tf.json)"
-    )
+    rel = os.path.relpath(out, ROOT)
+    print(f"  wrote {rel}/ (robot.urdf, tf_static.json, joint_states.json, tf.json)")
 
 
 def main() -> None:
