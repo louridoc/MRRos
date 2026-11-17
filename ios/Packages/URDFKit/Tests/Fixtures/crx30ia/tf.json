@@ -1,0 +1,142 @@
+{
+ "transforms": [
+  {
+   "child_frame_id": "J1_link",
+   "header": {
+    "frame_id": "base_link",
+    "stamp": {
+     "nanosec": 922263000,
+     "sec": 1794802252
+    }
+   },
+   "transform": {
+    "rotation": {
+     "w": 0.9887710779360422,
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0.14943813247359922
+    },
+    "translation": {
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0.37
+    }
+   }
+  },
+  {
+   "child_frame_id": "J2_link",
+   "header": {
+    "frame_id": "J1_link",
+    "stamp": {
+     "nanosec": 922263000,
+     "sec": 1794802252
+    }
+   },
+   "transform": {
+    "rotation": {
+     "w": 0.9393727128473791,
+     "x": 0.0,
+     "y": -0.3428978074554513,
+     "z": 0.0
+    },
+    "translation": {
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0.0
+    }
+   }
+  },
+  {
+   "child_frame_id": "J3_link",
+   "header": {
+    "frame_id": "J2_link",
+    "stamp": {
+     "nanosec": 922263000,
+     "sec": 1794802252
+    }
+   },
+   "transform": {
+    "rotation": {
+     "w": 0.968912421710645,
+     "x": 0.0,
+     "y": -0.2474039592545229,
+     "z": 0.0
+    },
+    "translation": {
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0.95
+    }
+   }
+  },
+  {
+   "child_frame_id": "J4_link",
+   "header": {
+    "frame_id": "J3_link",
+    "stamp": {
+     "nanosec": 922263000,
+     "sec": 1794802252
+    }
+   },
+   "transform": {
+    "rotation": {
+     "w": 0.9950041652780257,
+     "x": 0.09983341664682815,
+     "y": 0.0,
+     "z": 0.0
+    },
+    "translation": {
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0.0
+    }
+   }
+  },
+  {
+   "child_frame_id": "J5_link",
+   "header": {
+    "frame_id": "J4_link",
+    "stamp": {
+     "nanosec": 922263000,
+     "sec": 1794802252
+    }
+   },
+   "transform": {
+    "rotation": {
+     "w": 0.900447102352677,
+     "x": 0.0,
+     "y": -0.4349655341112302,
+     "z": 0.0
+    },
+    "translation": {
+     "x": 0.75,
+     "y": 0.0,
+     "z": 0.0
+    }
+   }
+  },
+  {
+   "child_frame_id": "J6_link",
+   "header": {
+    "frame_id": "J5_link",
+    "stamp": {
+     "nanosec": 922263000,
+     "sec": 1794802252
+    }
+   },
+   "transform": {
+    "rotation": {
+     "w": 0.8525245220595057,
+     "x": 0.5226872289306592,
+     "y": 0.0,
+     "z": 0.0
+    },
+    "translation": {
+     "x": 0.0,
+     "y": -0.185,
+     "z": 0.0
+    }
+   }
+  }
+ ]
+}

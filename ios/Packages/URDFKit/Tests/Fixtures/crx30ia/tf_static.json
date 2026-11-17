@@ -1,0 +1,119 @@
+{
+ "transforms": [
+  {
+   "child_frame_id": "flange",
+   "header": {
+    "frame_id": "J6_link",
+    "stamp": {
+     "nanosec": 933664000,
+     "sec": 1794802249
+    }
+   },
+   "transform": {
+    "rotation": {
+     "w": 1.0,
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0.0
+    },
+    "translation": {
+     "x": 0.18,
+     "y": 0.0,
+     "z": 0.0
+    }
+   }
+  },
+  {
+   "child_frame_id": "base_link",
+   "header": {
+    "frame_id": "world",
+    "stamp": {
+     "nanosec": 933664000,
+     "sec": 1794802249
+    }
+   },
+   "transform": {
+    "rotation": {
+     "w": 1.0,
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0.0
+    },
+    "translation": {
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0.75
+    }
+   }
+  },
+  {
+   "child_frame_id": "wbase",
+   "header": {
+    "frame_id": "base_link",
+    "stamp": {
+     "nanosec": 933664000,
+     "sec": 1794802249
+    }
+   },
+   "transform": {
+    "rotation": {
+     "w": 1.0,
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0.0
+    },
+    "translation": {
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0.37
+    }
+   }
+  },
+  {
+   "child_frame_id": "ee_link",
+   "header": {
+    "frame_id": "flange",
+    "stamp": {
+     "nanosec": 933664000,
+     "sec": 1794802249
+    }
+   },
+   "transform": {
+    "rotation": {
+     "w": 1.0,
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0.0
+    },
+    "translation": {
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0.0
+    }
+   }
+  },
+  {
+   "child_frame_id": "fanuc_flange",
+   "header": {
+    "frame_id": "flange",
+    "stamp": {
+     "nanosec": 933664000,
+     "sec": 1794802249
+    }
+   },
+   "transform": {
+    "rotation": {
+     "w": 4.329780281177467e-17,
+     "x": 0.7071067811865476,
+     "y": -4.3297802811774664e-17,
+     "z": 0.7071067811865475
+    },
+    "translation": {
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0.0
+    }
+   }
+  }
+ ]
+}

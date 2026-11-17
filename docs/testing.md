@@ -39,3 +39,23 @@ Findings log:
 - 2026-11-15: first drill showed "connected" for >30 s after Wi-Fi off (half-open TCP). Fixed with a
   2 s websocket heartbeat; second drill still stuck → the ping continuation ignored cancellation and
   froze the heartbeat task group. Reproduced locally with `tools/fake_dead_bridge.py`; fixed.
+
+## M2a — Robot in AR
+Automated: `tools/ios-test.sh URDFKit RobotModel MeshProvider AlignmentKit` (FK-vs-`/tf` exact
+match, mesh bundle coverage). Orientation/placement regressions: render on macOS first with
+`tools/debug/render_robot.sh <robot>` (real RobotModel/RealityKit code, no phone) before ever
+touching the device — see the header of `tools/meshes/usdz_convert.swift` for why a single
+isolated mesh is not a conclusive test.
+
+Device drill (bringup on the Mac, phone connected):
+- [x] Place robot (floor raycast) → CRX-30iA appears standing upright on the floor, correct
+      scale, base/J1–J6 all present, joints animate in sync with the panel (2026-11-16)
+- [x] No floating offset (base_link, not the URDF's `world` mount link, sits at the anchor)
+- [x] Mac-side render (`tools/debug/render_robot.sh`) confirmed upright for all 5 priority
+      robots (crx30ia, crx20ial, ur30, ur20, ur10e) before the device check
+
+M2a exit test met (2026-11-16). Two defects found and fixed same night: ~0.75 m float
+(anchored the URDF's structural root instead of `base_link` — fixed via
+`URDFRobot.baseFrame`) and mesh orientation (DAE up-axis wrap was 180° about X, needed 90°;
+first "fix" tested correct in isolation but was wrong on the full assembly — see
+`tools/debug/RobotViz`).

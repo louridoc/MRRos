@@ -1,0 +1,553 @@
+{
+ "version": 1,
+ "generated": "2026-11-17T01:50:01+00:00",
+ "robots": [
+  "crx30ia",
+  "crx20ial",
+  "ur30",
+  "ur20",
+  "ur10e"
+ ],
+ "entries": [
+  {
+   "uri": "package://fanuc_crx_description/meshes/crx20ia_l/visual/base.dae",
+   "file": "fanuc_crx_description/meshes/crx20ia_l/visual/base.usdz",
+   "sha256": "59037ce759728b86cb5b226ffbd446948d827fc9bd3d4410bc55c14c68e86b53",
+   "source": "fanuc_description@fb40c98",
+   "bytes": 131116,
+   "tris": 4796,
+   "bbox": [
+    -0.10199999809265137,
+    -0.08499997109174728,
+    -0.0949653834104538,
+    0.09499996900558472,
+    2.2351741790771484e-08,
+    0.0949653685092926
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://fanuc_crx_description/meshes/crx20ia_l/visual/j1.dae",
+   "file": "fanuc_crx_description/meshes/crx20ia_l/visual/j1.usdz",
+   "sha256": "5fdaaa6100b440a2a4361f5105566fdfd20c39cf036a179474daf9971b79d5b7",
+   "source": "fanuc_description@fb40c98",
+   "bytes": 178659,
+   "tris": 8020,
+   "bbox": [
+    -0.07899998873472214,
+    -0.3252020478248596,
+    -0.11900002509355545,
+    0.07899998873472214,
+    -0.08599992841482162,
+    0.08020203560590744
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://fanuc_crx_description/meshes/crx20ia_l/visual/j2.dae",
+   "file": "fanuc_crx_description/meshes/crx20ia_l/visual/j2.usdz",
+   "sha256": "159e71fcb209e7fa2ea932698c7221882518c77566e2de4c22a0237c5c02f59a",
+   "source": "fanuc_description@fb40c98",
+   "bytes": 639486,
+   "tris": 37638,
+   "bbox": [
+    -0.07899998873472214,
+    -1.0229377746582031,
+    -0.2984095811843872,
+    0.07899998873472214,
+    -0.16553378105163574,
+    -0.07599993050098419
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://fanuc_crx_description/meshes/crx20ia_l/visual/j3.dae",
+   "file": "fanuc_crx_description/meshes/crx20ia_l/visual/j3.usdz",
+   "sha256": "3d230a336f5ef6b196fb054088041f0eeab1721b818b00a91556610f080a4a88",
+   "source": "fanuc_description@fb40c98",
+   "bytes": 275136,
+   "tris": 11938,
+   "bbox": [
+    -0.06928563117980957,
+    -1.0263997316360474,
+    -0.07500009983778,
+    0.15109999477863312,
+    -0.8835997581481934,
+    0.07043332606554031
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://fanuc_crx_description/meshes/crx20ia_l/visual/j4.dae",
+   "file": "fanuc_crx_description/meshes/crx20ia_l/visual/j4.usdz",
+   "sha256": "47c236fe4e363e69f14870441d1d09f02c0f0ef47d5b55ffffcdf1192d9e9611",
+   "source": "fanuc_description@fb40c98",
+   "bytes": 559880,
+   "tris": 24642,
+   "bbox": [
+    0.15160000324249268,
+    -1.0134997367858887,
+    -0.06400012969970703,
+    0.5922501087188721,
+    -0.8964998722076416,
+    0.05849988013505936
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://fanuc_crx_description/meshes/crx20ia_l/visual/j5.dae",
+   "file": "fanuc_crx_description/meshes/crx20ia_l/visual/j5.usdz",
+   "sha256": "d821571e9821c422fb7ec2e443815e901fb4452bec06344a23721759e5278f79",
+   "source": "fanuc_description@fb40c98",
+   "bytes": 139161,
+   "tris": 6704,
+   "bbox": [
+    0.4818999767303467,
+    -1.0119937658309937,
+    -0.2080249786376953,
+    0.6395000219345093,
+    -0.8980058431625366,
+    -0.06499981880187988
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://fanuc_crx_description/meshes/crx20ia_l/visual/j6.dae",
+   "file": "fanuc_crx_description/meshes/crx20ia_l/visual/j6.usdz",
+   "sha256": "1c75bd94fb5f33d0d0c2092be7ce3f9926c5502ef2572b180709c5e322b7c1ba",
+   "source": "fanuc_description@fb40c98",
+   "bytes": 89793,
+   "tris": 2612,
+   "bbox": [
+    0.640500009059906,
+    -1.0009998083114624,
+    -0.20450006425380707,
+    0.7000001072883606,
+    -0.9089998006820679,
+    -0.08750005066394806
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://fanuc_crx_description/meshes/crx30ia/visual/base.dae",
+   "file": "fanuc_crx_description/meshes/crx30ia/visual/base.usdz",
+   "sha256": "24ab1b2969378b46063259a6ed11535c970794db3de9bc3bf7f33bc6dddbb18e",
+   "source": "fanuc_description@fb40c98",
+   "bytes": 299121,
+   "tris": 12770,
+   "bbox": [
+    -0.18750640749931335,
+    -0.17999997735023499,
+    -0.14149990677833557,
+    0.14149990677833557,
+    3.725290298461914e-08,
+    0.1414506733417511
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://fanuc_crx_description/meshes/crx30ia/visual/j1.dae",
+   "file": "fanuc_crx_description/meshes/crx30ia/visual/j1.usdz",
+   "sha256": "3fbd19d71d350941e7d968c32a9cda57d7b30f157124b514c6787cbd8158f8c7",
+   "source": "fanuc_description@fb40c98",
+   "bytes": 222466,
+   "tris": 10018,
+   "bbox": [
+    -0.11999999731779099,
+    -0.49106061458587646,
+    -0.17200006544589996,
+    0.11999999731779099,
+    -0.18099991977214813,
+    0.1210629865527153
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://fanuc_crx_description/meshes/crx30ia/visual/j2.dae",
+   "file": "fanuc_crx_description/meshes/crx30ia/visual/j2.usdz",
+   "sha256": "67c9aca343f08a5078cc343f0e885e8f29793e161b0830bd68b001d6ac455ba2",
+   "source": "fanuc_description@fb40c98",
+   "bytes": 424105,
+   "tris": 23978,
+   "bbox": [
+    -0.12454520165920258,
+    -1.41950261592865,
+    -0.41635870933532715,
+    0.12454520165920258,
+    -0.24480903148651123,
+    -0.11299991607666016
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://fanuc_crx_description/meshes/crx30ia/visual/j3.dae",
+   "file": "fanuc_crx_description/meshes/crx30ia/visual/j3.usdz",
+   "sha256": "ade2136e076f3ccd32d9fc3673ce543dbe81800f6690133307e076eed9a30b62",
+   "source": "fanuc_description@fb40c98",
+   "bytes": 228858,
+   "tris": 10636,
+   "bbox": [
+    -0.09306067228317261,
+    -1.4119994640350342,
+    -0.11200015246868134,
+    0.18299999833106995,
+    -1.2279996871948242,
+    0.09306052327156067
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://fanuc_crx_description/meshes/crx30ia/visual/j4.dae",
+   "file": "fanuc_crx_description/meshes/crx30ia/visual/j4.usdz",
+   "sha256": "352e1efd30e0a16f566fc9abcab4de57c70ac11bc2a5a5af9921f8fa3e899e90",
+   "source": "fanuc_description@fb40c98",
+   "bytes": 390352,
+   "tris": 17842,
+   "bbox": [
+    0.18400001525878906,
+    -1.3974376916885376,
+    -0.10500015318393707,
+    0.8144605159759521,
+    -1.2425616979599,
+    0.08818294107913971
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://fanuc_crx_description/meshes/crx30ia/visual/j5.dae",
+   "file": "fanuc_crx_description/meshes/crx30ia/visual/j5.usdz",
+   "sha256": "2ef593feed4a49ff8e7430f4f6d3d67d77d11fbae9ca5ef40a738c32626de347",
+   "source": "fanuc_description@fb40c98",
+   "bytes": 228978,
+   "tris": 11410,
+   "bbox": [
+    0.6600766181945801,
+    -1.396958589553833,
+    -0.2631780207157135,
+    0.8654999732971191,
+    -1.2430405616760254,
+    -0.1060001328587532
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://fanuc_crx_description/meshes/crx30ia/visual/j6.dae",
+   "file": "fanuc_crx_description/meshes/crx30ia/visual/j6.usdz",
+   "sha256": "0766daf4469654052750de1ccb06f33c8b30b89be2a8c946a23472dd3bb9883a",
+   "source": "fanuc_description@fb40c98",
+   "bytes": 163770,
+   "tris": 4924,
+   "bbox": [
+    0.8665000200271606,
+    -1.3759996891021729,
+    -0.24950011074543,
+    0.9300001859664917,
+    -1.2634997367858887,
+    -0.11250011622905731
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://ur_description/meshes/ur10e/visual/base.dae",
+   "file": "ur_description/meshes/ur10e/visual/base.usdz",
+   "sha256": "28226d95af8c1579a49fe69b62a00d9133a2a05258dad550bb9b583c80dc938f",
+   "source": "ur_description@3.5.1",
+   "bytes": 362794,
+   "tris": 5002,
+   "bbox": [
+    -0.0949825569987297,
+    -0.09929871559143066,
+    -0.09498750418424606,
+    0.0949825569987297,
+    1.4901161193847656e-08,
+    0.0949339047074318
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://ur_description/meshes/ur10e/visual/forearm.dae",
+   "file": "ur_description/meshes/ur10e/visual/forearm.usdz",
+   "sha256": "24d909834c380cceb0490181dae40bcdfcfa4a7fb0c6807d6e58794cdfadcf6e",
+   "source": "ur_description@3.5.1",
+   "bytes": 1292662,
+   "tris": 17929,
+   "bbox": [
+    -0.05799713730812073,
+    -0.6176021695137024,
+    -0.05815860629081726,
+    0.05799674987792969,
+    0.05879867076873779,
+    0.06674876064062119
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://ur_description/meshes/ur10e/visual/shoulder.dae",
+   "file": "ur_description/meshes/ur10e/visual/shoulder.usdz",
+   "sha256": "1c38a6afedfb8f064117da87b60c2dcb9ccd107f957e4c5e0a198f4c2bb63d36",
+   "source": "ur_description@3.5.1",
+   "bytes": 2167756,
+   "tris": 30093,
+   "bbox": [
+    -0.0763702467083931,
+    -0.09389596432447433,
+    -0.07637786865234375,
+    0.07637547701597214,
+    0.08170127123594284,
+    0.09459881484508514
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://ur_description/meshes/ur10e/visual/upperarm.dae",
+   "file": "ur_description/meshes/ur10e/visual/upperarm.usdz",
+   "sha256": "f9d2380d14127440f4a50ed79ab4e7562f86289cd6131016c3d49a3e7483e6ed",
+   "source": "ur_description@3.5.1",
+   "bytes": 1406739,
+   "tris": 41143,
+   "bbox": [
+    -0.0763726532459259,
+    -0.08140119910240173,
+    -0.07667762041091919,
+    0.07635770738124847,
+    0.09319567680358887,
+    0.6723918318748474
+   ],
+   "via": "trimesh-obj+scenekit",
+   "axis_fix_applied": false
+  },
+  {
+   "uri": "package://ur_description/meshes/ur10e/visual/wrist1.dae",
+   "file": "ur_description/meshes/ur10e/visual/wrist1.usdz",
+   "sha256": "643717d042920313dd9daa81511bd9afa66a877625967e6dd8d359ec851b4237",
+   "source": "ur_description@3.5.1",
+   "bytes": 1156938,
+   "tris": 16053,
+   "bbox": [
+    -0.04698410630226135,
+    -0.06656615436077118,
+    0.06674855947494507,
+    0.046987585723400116,
+    0.05750616267323494,
+    0.1821514368057251
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://ur_description/meshes/ur10e/visual/wrist2.dae",
+   "file": "ur_description/meshes/ur10e/visual/wrist2.usdz",
+   "sha256": "b820e8c8a4488563c7a21fe73bf2fa4038ec9f882dcf9db12e2d1df928253793",
+   "source": "ur_description@3.5.1",
+   "bytes": 1328840,
+   "tris": 18423,
+   "bbox": [
+    -0.04698425158858299,
+    -0.16646742820739746,
+    -0.05697951093316078,
+    0.0470004640519619,
+    -0.06656596064567566,
+    0.06794697046279907
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://ur_description/meshes/ur10e/visual/wrist3.dae",
+   "file": "ur_description/meshes/ur10e/visual/wrist3.usdz",
+   "sha256": "52ace7588f131dc43b49ba88d1c83c1f871e6d00659ea84b1f437e2a7f1ab7fe",
+   "source": "ur_description@3.5.1",
+   "bytes": 32866,
+   "tris": 978,
+   "bbox": [
+    -0.04484003037214279,
+    0.06794670969247818,
+    -0.04552304744720459,
+    0.04483988136053085,
+    0.11678437143564224,
+    0.05107396841049194
+   ],
+   "via": "trimesh-obj+scenekit",
+   "axis_fix_applied": false
+  },
+  {
+   "uri": "package://ur_description/meshes/ur20/visual/base.dae",
+   "file": "ur_description/meshes/ur20/visual/base.usdz",
+   "sha256": "dc5673ad78ac29b3c3f6ddd7465529af5eedbd3b76fdf4d2940b0ec2ce05762c",
+   "source": "ur_description@3.5.1",
+   "bytes": 1844913,
+   "tris": 2122,
+   "bbox": [
+    -0.12251037359237671,
+    -0.10764822363853455,
+    -0.12251035124063492,
+    0.12256631255149841,
+    -0.00019209086894989014,
+    0.12251036614179611
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://ur_description/meshes/ur20/visual/forearm.dae",
+   "file": "ur_description/meshes/ur20/visual/forearm.usdz",
+   "sha256": "1b9523f0122f7b186a0b0223636b0713e908536f4812cb7ef3ead227e310f09b",
+   "source": "ur_description@3.5.1",
+   "bytes": 2131677,
+   "tris": 4292,
+   "bbox": [
+    -0.07528947293758392,
+    -0.7805488109588623,
+    -0.0787050649523735,
+    0.07521818578243256,
+    0.07779395580291748,
+    0.10470034927129745
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://ur_description/meshes/ur20/visual/shoulder.dae",
+   "file": "ur_description/meshes/ur20/visual/shoulder.usdz",
+   "sha256": "4ac24b17acd73d47d6f4c213e2786abe4d491600363591790ceaa8f601474e20",
+   "source": "ur_description@3.5.1",
+   "bytes": 1711443,
+   "tris": 1112,
+   "bbox": [
+    -0.09047393500804901,
+    -0.09686761349439621,
+    -0.08999364078044891,
+    0.09049217402935028,
+    0.12792734801769257,
+    0.1340000033378601
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://ur_description/meshes/ur20/visual/upperarm.dae",
+   "file": "ur_description/meshes/ur20/visual/upperarm.usdz",
+   "sha256": "550f87116f6f75588ee1ab028a1413cffe45546e5bda39a7e22a56888de9a4ad",
+   "source": "ur_description@3.5.1",
+   "bytes": 2079869,
+   "tris": 3900,
+   "bbox": [
+    -0.08986285328865051,
+    -0.939638614654541,
+    -0.1310402750968933,
+    0.09045404195785522,
+    0.0931617021560669,
+    0.0919569581747055
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://ur_description/meshes/ur20/visual/wrist1.dae",
+   "file": "ur_description/meshes/ur20/visual/wrist1.usdz",
+   "sha256": "40e172b209db1a89f2bc74e4120ab751ba6ca7a13b80aba4fc286280902e6483",
+   "source": "ur_description@3.5.1",
+   "bytes": 1841810,
+   "tris": 2099,
+   "bbox": [
+    -0.05006510019302368,
+    -0.0846518874168396,
+    -1.4081597328186035e-06,
+    0.050078511238098145,
+    0.05242891609668732,
+    0.12916451692581177
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://ur_description/meshes/ur20/visual/wrist2.dae",
+   "file": "ur_description/meshes/ur20/visual/wrist2.usdz",
+   "sha256": "ba20b26ac45e934efc804d3376fe5bf0d2c2fda6f9563a48b60d926e76404a43",
+   "source": "ur_description@3.5.1",
+   "bytes": 1755003,
+   "tris": 1442,
+   "bbox": [
+    -0.05035638064146042,
+    -0.1247124969959259,
+    -0.05383902043104172,
+    0.05021964758634567,
+    1.3783574104309082e-07,
+    0.08438295871019363
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://ur_description/meshes/ur20/visual/wrist3.dae",
+   "file": "ur_description/meshes/ur20/visual/wrist3.usdz",
+   "sha256": "8440f202606a4c1325a2f31b45ae19ab439c99db0842f2ce7637dd789563ead9",
+   "source": "ur_description@3.5.1",
+   "bytes": 1831103,
+   "tris": 2020,
+   "bbox": [
+    -0.05000913143157959,
+    -0.05565178021788597,
+    -0.0002501048147678375,
+    0.05000877380371094,
+    0.050008658319711685,
+    0.06964999437332153
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://ur_description/meshes/ur30/visual/forearm.dae",
+   "file": "ur_description/meshes/ur30/visual/forearm.usdz",
+   "sha256": "70765d5e0ead8cffb7913c949a665e902e168696e7892b3525190236e389ff02",
+   "source": "ur_description@3.5.1",
+   "bytes": 2148924,
+   "tris": 4420,
+   "bbox": [
+    -0.0752895250916481,
+    -0.555374264717102,
+    -0.07858169823884964,
+    0.07521828263998032,
+    0.07779383659362793,
+    0.1048249825835228
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  },
+  {
+   "uri": "package://ur_description/meshes/ur30/visual/upperarm.dae",
+   "file": "ur_description/meshes/ur30/visual/upperarm.usdz",
+   "sha256": "e36ac8d9508459e6d6b56b488da5e2cf12525319d9e1aa5d681cbb6d564d40b0",
+   "source": "ur_description@3.5.1",
+   "bytes": 2088669,
+   "tris": 3964,
+   "bbox": [
+    -0.08997688442468643,
+    -0.7146784067153931,
+    -0.13102532923221588,
+    0.0903640165925026,
+    0.09321600198745728,
+    0.09197381138801575
+   ],
+   "via": "scenekit",
+   "axis_fix_applied": true
+  }
+ ]
+}

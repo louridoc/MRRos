@@ -11,6 +11,8 @@ let package = Package(
         .package(path: "../URDFKit"),
         .package(path: "../MeshProvider"),
         .package(path: "../TFKit"),
+        .package(path: "../AlignmentKit"),
+        .package(path: "../ROSMessages"),
     ],
     targets: [
         .target(
@@ -19,6 +21,8 @@ let package = Package(
                 .product(name: "URDFKit", package: "URDFKit"),
                 .product(name: "MeshProvider", package: "MeshProvider"),
                 .product(name: "TFKit", package: "TFKit"),
+                .product(name: "AlignmentKit", package: "AlignmentKit"),
+                .product(name: "ROSMessages", package: "ROSMessages"),
             ],
             swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
         ),

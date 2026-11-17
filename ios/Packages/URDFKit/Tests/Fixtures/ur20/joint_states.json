@@ -1,0 +1,27 @@
+{
+ "effort": [],
+ "header": {
+  "frame_id": "",
+  "stamp": {
+   "nanosec": 797420000,
+   "sec": 1794802279
+  }
+ },
+ "name": [
+  "shoulder_pan_joint",
+  "shoulder_lift_joint",
+  "elbow_joint",
+  "wrist_1_joint",
+  "wrist_2_joint",
+  "wrist_3_joint"
+ ],
+ "position": [
+  0.3,
+  -0.7,
+  0.5,
+  -0.2,
+  0.9,
+  -1.1
+ ],
+ "velocity": []
+}
