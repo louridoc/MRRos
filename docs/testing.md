@@ -80,7 +80,7 @@ before any device check, same discipline as M2a:
       cache alone (`~/Library/Caches/Meshes/ur_description/meshes/ur16e/visual/*.obj`), no
       network touched — the caching contract in `docs/protocols/ar_bridge_http.md` holds
 
-Device check: TODO (not yet run — Mac-side verification above is conclusive enough for the
-mesh/network pipeline; a device pass should still confirm placement/AR behavior end-to-end).
+- [x] Device check: connected to the live UR16e + `ar_bridge` bringup, placed the robot — UR16e
+      appeared correctly, fetched meshes loaded over the network (2026-11-17)
 
-M2b exit test (Mac-side) met (2026-11-17).
+M2b exit test met (2026-11-17), Mac-side and device.
