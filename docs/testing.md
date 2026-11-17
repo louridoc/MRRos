@@ -59,3 +59,28 @@ M2a exit test met (2026-11-16). Two defects found and fixed same night: ~0.75 m 
 `URDFRobot.baseFrame`) and mesh orientation (DAE up-axis wrap was 180° about X, needed 90°;
 first "fix" tested correct in isolation but was wrong on the full assembly — see
 `tools/debug/RobotViz`).
+
+## M2b — Robot in AR (any URDF)
+Automated: `tools/ios-test.sh ARBridgeTransport MeshProvider` (mocked HTTP transport, both
+success and every documented error status), `cd ros2_ws && tools/ros.sh jazzy pytest -q`
+(`mesh_resolver` — URI parsing, package resolution, trimesh conversion with a real tiny STL
+fixture, atomic caching).
+
+Mac-side end-to-end check (no phone), per `tools/debug/render_robot.sh`'s M2b section — run
+before any device check, same discipline as M2a:
+- [x] `ros2 launch ar_dev_bringup dev.launch.py robot:=ur16e` → `ar_bridge` live, `GET /health`
+      and `GET /v0/mesh?uri=package://ur_description/meshes/ur16e/visual/forearm.dae` both
+      correct over real HTTP (curl), `X-Mesh-SHA256` present, body is valid OBJ (2026-11-17)
+- [x] UR16e (no bundled meshes at all — only `forearm.dae`/`upperarm.dae` are UR16e-specific;
+      base/shoulder/wrist1-3 resolve from the bundled UR10e meshes it shares them with) renders
+      correctly via `RobotViz --ar-bridge-url`: standing upright, arm extended per the standard
+      UR zero-pose convention, fetched (gray, untextured) and bundled (white) parts seamlessly
+      joined — proving net-identity OBJ loading needs no up-axis correction, unlike DAE/USDZ
+- [x] Re-render with `--ar-bridge-url` **omitted** → bit-identical image from the tier-2 disk
+      cache alone (`~/Library/Caches/Meshes/ur_description/meshes/ur16e/visual/*.obj`), no
+      network touched — the caching contract in `docs/protocols/ar_bridge_http.md` holds
+
+- [x] Device check: connected to the live UR16e + `ar_bridge` bringup, placed the robot — UR16e
+      appeared correctly, fetched meshes loaded over the network (2026-11-17)
+
+M2b exit test met (2026-11-17), Mac-side and device.

@@ -20,7 +20,10 @@ let package = Package(
         ),
         .testTarget(
             name: "MeshProviderTests",
-            dependencies: ["MeshProvider"]
+            dependencies: [
+                "MeshProvider",
+                .product(name: "ARBridgeTransport", package: "ARBridgeTransport"),
+            ]
         ),
     ]
 )

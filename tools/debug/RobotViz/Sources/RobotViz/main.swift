@@ -9,6 +9,7 @@
 
 import AlignmentKit
 import AppKit
+import ARBridgeTransport
 import Foundation
 import MeshProvider
 import RealityKit
@@ -25,6 +26,13 @@ struct Args {
     var singleMesh: String?
     var extraRotDeg: Double = 0
     var meshTestRotDeg: Double = 0
+    /// Overrides the fixture-directory convention — for a robot with no recorded fixture (e.g.
+    /// one that's deliberately NOT in the bundle, to exercise MeshProvider's remote tier).
+    var urdfPath: String?
+    /// When set, MeshProvider gets a real `RemoteMeshSource` pointed at a live ar_bridge, e.g.
+    /// `http://localhost:8765` — for testing M2b (a robot not in the bundle, fetched over HTTP)
+    /// entirely on the Mac before ever touching the phone.
+    var arBridgeURL: String?
 }
 
 func parseArgs() -> Args {
@@ -48,6 +56,8 @@ func parseArgs() -> Args {
         case "--single-mesh": a.singleMesh = it.next()
         case "--mesh-test-rot-deg": a.meshTestRotDeg = Double(it.next() ?? "") ?? 0
         case "--extra-rot-deg": a.extraRotDeg = Double(it.next() ?? "") ?? 0
+        case "--urdf": a.urdfPath = it.next()
+        case "--ar-bridge-url": a.arBridgeURL = it.next()
         default:
             FileHandle.standardError.write(Data("ignoring unknown arg: \(arg)\n".utf8))
         }
@@ -59,11 +69,16 @@ let args = parseArgs()
 let repoRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-let fixtureDir = repoRoot.appendingPathComponent("ios/Packages/URDFKit/Tests/Fixtures/\(args.robot)")
 let meshesDir = repoRoot.appendingPathComponent("ios/MRRos/Meshes")
 
-guard let urdfData = try? Data(contentsOf: fixtureDir.appendingPathComponent("robot.urdf")) else {
-    fatalError("no fixture at \(fixtureDir.path) — run tools/record-robot-fixtures.py first")
+let urdfURL: URL = if let urdfPath = args.urdfPath {
+    URL(fileURLWithPath: urdfPath)
+} else {
+    repoRoot.appendingPathComponent("ios/Packages/URDFKit/Tests/Fixtures/\(args.robot)/robot.urdf")
+}
+
+guard let urdfData = try? Data(contentsOf: urdfURL) else {
+    fatalError("no URDF at \(urdfURL.path) — run tools/record-robot-fixtures.py first, or pass --urdf")
 }
 
 let robotModel = try! URDFParser.parse(urdfData)
@@ -71,7 +86,21 @@ print("robot: \(robotModel.name)  rootLink: \(robotModel.rootLink)  baseFrame: \
 print("actuated joints: \(robotModel.actuatedJointNames)")
 print("positions: \(args.positions.isEmpty ? "(zero/home pose)" : "\(args.positions)")")
 
-let meshes = MeshProvider(sources: [DirectoryMeshSource(name: "bundled", root: meshesDir)])
+var meshSources: [any MeshSource] = [
+    DirectoryMeshSource(name: "bundled", root: meshesDir),
+    DirectoryMeshSource.cache(),
+]
+if let arBridgeURLString = args.arBridgeURL, let arBridgeURL = URL(string: arBridgeURLString) {
+    print("ar_bridge: \(arBridgeURL) (remote mesh tier enabled)")
+    meshSources.append(
+        RemoteMeshSource(
+            client: ARBridgeClient(baseURL: arBridgeURL),
+            cacheRoot: DirectoryMeshSource.cache().root
+        )
+    )
+}
+
+let meshes = MeshProvider(sources: meshSources)
 
 // MARK: - AppKit/RealityKit scaffolding (native macOS ARView, no AR session — see investigation
 

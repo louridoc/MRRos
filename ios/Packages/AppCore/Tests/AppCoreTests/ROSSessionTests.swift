@@ -32,6 +32,14 @@ struct ROSSessionTests {
             .absoluteString == "ws://lab.local:9090")
     }
 
+    @Test func arBridgeURLUsesTheArBridgePortNotRosbridgesPort() {
+        let s = ConnectionSettings(host: "lab.local", port: 9090)
+        #expect(s.arBridgePort == 8765, "default from the protocol doc")
+        #expect(s.arBridgeURL?.absoluteString == "http://lab.local:8765")
+        #expect(ConnectionSettings(host: " ").arBridgeURL == nil)
+        #expect(ConnectionSettings(host: "h", arBridgePort: 0).arBridgeURL == nil)
+    }
+
     @Test func connectSubscribesAndUpdatesJointsAndRobotName() async throws {
         let (session, mock, _) = makeSession()
         let connecting = Task { await session.connect() }

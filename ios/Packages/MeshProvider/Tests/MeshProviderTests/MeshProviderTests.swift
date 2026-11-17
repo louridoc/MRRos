@@ -1,3 +1,4 @@
+import ARBridgeTransport
 import Foundation
 @testable import MeshProvider
 import Testing
@@ -53,6 +54,22 @@ struct DirectorySourceTests {
         #expect(try await src.url(for: #require(MeshKey(uri: "package://pkg/meshes/missing.dae"))) == nil)
     }
 
+    @Test func fallsBackToObjConventionWhenNoManifestAndNoUsdz() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meshsrc-\(UUID().uuidString)")
+        let file = root.appendingPathComponent("ur_description/meshes/ur16e/visual/base.obj")
+        try FileManager.default.createDirectory(
+            at: file.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try Data("v 0 0 0".utf8).write(to: file)
+
+        let src = DirectoryMeshSource(name: "cache", root: root) // no meshes.json here
+        #expect(src.manifest == nil)
+        let key = try #require(MeshKey(uri: "package://ur_description/meshes/ur16e/visual/base.dae"))
+        let found = try await src.url(for: key)
+        #expect(found?.lastPathComponent == "base.obj")
+    }
+
     @Test func missingManifestIsAnEmptyTierNotAnError() async throws {
         let src = DirectoryMeshSource(name: "empty", root: URL(fileURLWithPath: "/nonexistent/\(UUID())"))
         #expect(src.manifest == nil)
@@ -87,6 +104,77 @@ struct DirectorySourceTests {
         }
         await #expect(throws: MeshProviderError.invalidURI("http://x")) {
             _ = try await p.resolve("http://x")
+        }
+    }
+}
+
+struct RemoteMeshSourceTests {
+    private func makeClient(mock: MockHTTPTransport) -> ARBridgeClient {
+        ARBridgeClient(baseURL: URL(string: "http://mock:8765")!, transport: mock)
+    }
+
+    @Test func fetchesConvertsCachesAndReturnsTheCachedFile() async throws {
+        let mock = MockHTTPTransport()
+        await mock.respond(
+            whenURLContains: "/v0/mesh",
+            with: HTTPResponse(
+                statusCode: 200, data: Data("v 0 0 0\nf 1 1 1".utf8),
+                headers: ["X-Mesh-SHA256": "abc123"]
+            )
+        )
+        let cacheRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("remotecache-\(UUID().uuidString)")
+        let source = RemoteMeshSource(client: makeClient(mock: mock), cacheRoot: cacheRoot)
+        let key = try #require(MeshKey(uri: "package://ur_description/meshes/ur16e/visual/base.dae"))
+
+        let url = try await source.url(for: key)
+        #expect(url?.lastPathComponent == "base.obj")
+        #expect(try #require(url).path.contains("ur_description/meshes/ur16e/visual"))
+        #expect(try Data(contentsOf: #require(url)) == Data("v 0 0 0\nf 1 1 1".utf8))
+
+        // A plain DirectoryMeshSource over the same root now finds it too (tier 2 on next launch).
+        let cacheTier = DirectoryMeshSource(name: "cache", root: cacheRoot)
+        #expect(try await cacheTier.url(for: key) == url)
+    }
+
+    @Test func propagatesRichErrorsRatherThanSwallowingToNil() async throws {
+        let mock = MockHTTPTransport()
+        await mock.respond(
+            whenURLContains: "/v0/mesh",
+            with: HTTPResponse(statusCode: 404, data: Data("gone".utf8), headers: [:])
+        )
+        let source = RemoteMeshSource(
+            client: makeClient(mock: mock),
+            cacheRoot: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        )
+        let key = try #require(MeshKey(uri: "package://pkg/missing.dae"))
+        await #expect(throws: ARBridgeError.notFound("gone")) {
+            _ = try await source.url(for: key)
+        }
+    }
+
+    @Test func standardWithoutArBridgeNeverTriesTheNetwork() async throws {
+        // No client given: resolve() must fail with the generic "no tier had it" error, not
+        // anything network-shaped — proving the remote tier is genuinely absent, not just failing.
+        let withoutClient = MeshProvider.standard()
+        let key = try #require(MeshKey(uri: "package://nowhere/x.dae"))
+        await #expect(throws: MeshProviderError.notFound(key)) {
+            _ = try await withoutClient.resolve("package://nowhere/x.dae")
+        }
+    }
+
+    @Test func standardWithArBridgeTriesTheRemoteTierOnMiss() async throws {
+        let mock = MockHTTPTransport()
+        await mock.respond(
+            whenURLContains: "/v0/mesh",
+            with: HTTPResponse(statusCode: 404, data: Data("gone".utf8), headers: [:])
+        )
+        let withClient = MeshProvider.standard(arBridge: makeClient(mock: mock))
+        // Bundled and cache tiers miss (nothing on disk for this made-up key), so this must
+        // reach the remote tier and surface ITS error — not the generic "no tier had it" one —
+        // proving the remote tier was actually appended and consulted.
+        await #expect(throws: ARBridgeError.notFound("gone")) {
+            _ = try await withClient.resolve("package://nowhere/x.dae")
         }
     }
 }

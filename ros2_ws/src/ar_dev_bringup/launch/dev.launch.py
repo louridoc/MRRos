@@ -1,8 +1,9 @@
-"""Dev bringup: robot_state_publisher(<robot>) + mock joints + rosbridge + rviz.
+"""Dev bringup: robot_state_publisher(<robot>) + mock joints + rosbridge + ar_bridge + rviz.
 
   ros2 launch ar_dev_bringup dev.launch.py robot:=crx30ia   # crx20ial ur30 ur20 ur10e ...
   ros2 launch ar_dev_bringup dev.launch.py robot:=ur30 rviz:=false frozen:=true
   ros2 launch ar_dev_bringup dev.launch.py robot:=ur30 rviz:=false positions:="0.1,-0.5,0.3,0,0.2,1"
+  ros2 launch ar_dev_bringup dev.launch.py robot:=ur16e ar_bridge:=false   # skip ar_bridge
 
 Works unchanged on Humble, Jazzy and Lyrical; distro-specific bits belong in distro.py.
 """
@@ -79,7 +80,15 @@ def _setup(context, *args, **kwargs):
         output="log",
     )
 
-    return [rsp, mock, rosbridge, rviz]
+    ar_bridge = Node(
+        package="ar_bridge",
+        executable="ar_bridge",
+        parameters=[{"http_port": LaunchConfiguration("ar_bridge_port")}],
+        condition=IfCondition(LaunchConfiguration("ar_bridge")),
+        output="screen",
+    )
+
+    return [rsp, mock, rosbridge, rviz, ar_bridge]
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -94,6 +103,10 @@ def generate_launch_description() -> LaunchDescription:
                 description="comma-separated constant joint positions",
             ),
             DeclareLaunchArgument("rosbridge_port", default_value="9090"),
+            DeclareLaunchArgument(
+                "ar_bridge", default_value="true", description="launch ar_bridge too"
+            ),
+            DeclareLaunchArgument("ar_bridge_port", default_value="8765"),
             OpaqueFunction(function=_setup),
         ]
     )

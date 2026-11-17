@@ -13,12 +13,17 @@ from aiohttp import web
 PROTOCOL_VERSION = 0
 
 # (bytes, content_type, sha256)
-MeshResult = tuple[bytes, str, str] | None
+MeshResult = tuple[bytes, str, str]
 
 
 @dataclass
 class Handlers:
-    """ROS-side effects injected by the node. All optional in M0."""
+    """ROS-side effects injected by the node. All optional in M0.
+
+    `get_mesh` returns the mesh on success; for any 4xx/5xx case it raises an exception with a
+    `.status` int attribute (see `ar_bridge.mesh_resolver.MeshResolverError`) — kept duck-typed
+    here so this module stays free of any ar_bridge-specific import.
+    """
 
     on_cloud: Callable[[bytes, dict[str, str]], Awaitable[dict]] | None = None
     get_mesh: Callable[[str], Awaitable[MeshResult]] | None = None
@@ -51,10 +56,14 @@ def make_app(handlers: Handlers, *, node_name: str = "ar_bridge") -> web.Applica
         uri = request.query.get("uri")
         if not uri:
             raise web.HTTPBadRequest(reason="missing ?uri=package://...")
-        found = await handlers.get_mesh(uri)
-        if found is None:
-            raise web.HTTPNotFound(reason=f"no mesh for {uri}")
-        data, content_type, sha256 = found
+        try:
+            data, content_type, sha256 = await handlers.get_mesh(uri)
+        except Exception as e:
+            # Duck-typed: any exception carrying `.status` (MeshResolverError) maps straight to
+            # that HTTP status; anything else is a genuine bug, so it surfaces as 500 rather than
+            # being swallowed.
+            status = getattr(e, "status", 500)
+            return web.Response(status=status, text=str(e))
         return web.Response(body=data, content_type=content_type, headers={"X-Mesh-SHA256": sha256})
 
     app.add_routes(
