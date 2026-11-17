@@ -18,6 +18,15 @@
 #   tools/debug/render_robot.sh crx30ia /tmp/t270.png --mesh-test-rot-deg 270
 # then look at all four and pick the one where the robot stands upright. See the comment at the
 # top of tools/meshes/usdz_convert.swift for how that angle becomes the real fix.
+#
+# M2b (a robot NOT in the bundle, meshes fetched from ar_bridge over HTTP) — test this on the
+# Mac before ever touching the phone:
+#   1. ros2 launch ar_dev_bringup dev.launch.py robot:=ur16e rviz:=false   # ar_bridge:=true (default)
+#   2. ros2 run xacro xacro $(ros2 pkg prefix ur_description)/share/ur_description/urdf/ur.urdf.xacro \
+#        name:=ur ur_type:=ur16e > /tmp/ur16e.urdf   # or any robot with no fixture under ios/Packages/URDFKit/Tests/Fixtures
+#   3. tools/debug/render_robot.sh _ /tmp/ur16e.png --urdf /tmp/ur16e.urdf --ar-bridge-url http://localhost:8765
+# A second run with --ar-bridge-url omitted should render identically from the disk cache alone
+# (~/Library/Caches/Meshes), with no network access — proving the cache tier actually works.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

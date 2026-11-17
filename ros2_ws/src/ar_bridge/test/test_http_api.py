@@ -39,3 +39,47 @@ async def test_cloud_handler_receives_bytes_and_query():
         assert r.status == 200
         assert (await r.json()) == {"points": 3}
     assert seen == {"data": b"PLY", "meta": {"frame_id": "map"}}
+
+
+async def test_mesh_handler_returns_body_content_type_and_sha_header():
+    async def get_mesh(uri: str):
+        assert uri == "package://pkg/a.obj"
+        return b"OBJDATA", "model/obj", "deadbeef"
+
+    app = make_app(Handlers(get_mesh=get_mesh))
+    async with TestClient(TestServer(app)) as c:
+        r = await c.get("/v0/mesh", params={"uri": "package://pkg/a.obj"})
+        assert r.status == 200
+        assert await r.read() == b"OBJDATA"
+        assert r.headers["X-Mesh-SHA256"] == "deadbeef"
+        assert r.content_type == "model/obj"
+
+
+async def test_mesh_handler_missing_uri_is_400():
+    app = make_app(Handlers(get_mesh=lambda uri: None))
+    async with TestClient(TestServer(app)) as c:
+        assert (await c.get("/v0/mesh")).status == 400
+
+
+async def test_mesh_handler_maps_resolver_error_status():
+    class Boom(Exception):
+        status = 404
+
+    async def get_mesh(uri: str):
+        raise Boom("no such package")
+
+    app = make_app(Handlers(get_mesh=get_mesh))
+    async with TestClient(TestServer(app)) as c:
+        r = await c.get("/v0/mesh", params={"uri": "package://ghost/x.dae"})
+        assert r.status == 404
+        assert "no such package" in await r.text()
+
+
+async def test_mesh_handler_unstatused_exception_is_500():
+    async def get_mesh(uri: str):
+        raise RuntimeError("bug")
+
+    app = make_app(Handlers(get_mesh=get_mesh))
+    async with TestClient(TestServer(app)) as c:
+        r = await c.get("/v0/mesh", params={"uri": "package://pkg/a.obj"})
+        assert r.status == 500

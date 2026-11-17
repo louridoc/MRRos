@@ -1,4 +1,5 @@
 import AppCore
+import ARBridgeTransport
 import ARKit
 import Combine
 import MeshProvider
@@ -52,8 +53,16 @@ struct ARContainerView: UIViewRepresentable {
         private var lastStamp: ROSTime?
         private var updateSubscription: Cancellable?
         private var buildTask: Task<Void, Never>?
-        private let meshes = MeshProvider.standard()
         private let log = Logger(subsystem: "io.github.louridoc.mrros", category: "ARContainer")
+
+        /// Built fresh per placement from the session's CURRENT host, so a reconnect to a
+        /// different lab PC (or ar_bridge simply coming up after rosbridge) is picked up without
+        /// restarting the app. Bundled/cache tiers work even before any connection; the remote
+        /// tier (M2b) is appended only when `arBridgeURL` resolves (host non-empty, valid port).
+        private var meshes: MeshProvider {
+            guard let arBridgeURL = session.settings.arBridgeURL else { return .standard() }
+            return .standard(arBridge: ARBridgeClient(baseURL: arBridgeURL))
+        }
 
         init(session: ROSSession, scene: RobotScene) {
             self.session = session

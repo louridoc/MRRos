@@ -1,5 +1,4 @@
 import Foundation
-import os
 
 /// One tier of mesh lookup. Returns `nil` when it does not have the mesh (next tier is tried)
 /// and throws only for real failures.
@@ -22,9 +21,20 @@ public struct DirectoryMeshSource: MeshSource {
     }
 
     public func url(for key: MeshKey) async throws -> URL? {
-        let rel = manifest?.entry(for: key)?.file ?? key.bundledRelativePath
-        let url = root.appendingPathComponent(rel)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        if let manifestFile = manifest?.entry(for: key)?.file {
+            let url = root.appendingPathComponent(manifestFile)
+            return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        }
+        // No manifest entry: try both conventions. Tier 1 (bundled) always has a manifest, so
+        // this path matters for tier 2 (cache), which tier 3 writes into directly without
+        // maintaining a manifest — see RemoteMeshSource.
+        for rel in [key.bundledRelativePath, key.remoteRelativePath] {
+            let url = root.appendingPathComponent(rel)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+        return nil
     }
 }
 
@@ -49,16 +59,11 @@ public extension DirectoryMeshSource {
 public actor MeshProvider {
     private let sources: [any MeshSource]
     private var resolved: [MeshKey: URL] = [:]
-    private let log = Logger(subsystem: "io.github.louridoc.mrros", category: "MeshProvider")
-
     public init(sources: [any MeshSource]) {
         self.sources = sources
     }
 
-    /// Bundled → cache (→ remote, added in M2b).
-    public static func standard() -> MeshProvider {
-        MeshProvider(sources: [DirectoryMeshSource.bundled(), DirectoryMeshSource.cache()])
-    }
+    // `standard(arBridge:)` — bundled → cache → remote — is in RemoteMeshSource.swift.
 
     public func resolve(_ uri: String) async throws -> URL {
         guard let key = MeshKey(uri: uri) else { throw MeshProviderError.invalidURI(uri) }

@@ -11,6 +11,7 @@ let package = Package(
         .package(path: "../../../ios/Packages/MeshProvider"),
         .package(path: "../../../ios/Packages/RobotModel"),
         .package(path: "../../../ios/Packages/AlignmentKit"),
+        .package(path: "../../../ios/Packages/ARBridgeTransport"),
     ],
     targets: [
         .executableTarget(
@@ -20,6 +21,7 @@ let package = Package(
                 .product(name: "MeshProvider", package: "MeshProvider"),
                 .product(name: "RobotModel", package: "RobotModel"),
                 .product(name: "AlignmentKit", package: "AlignmentKit"),
+                .product(name: "ARBridgeTransport", package: "ARBridgeTransport"),
             ]
         ),
     ]

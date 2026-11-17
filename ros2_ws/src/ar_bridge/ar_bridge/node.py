@@ -4,8 +4,10 @@ Parameters:
   http_port (int)        default 8765
   frame_id (string)      frame the published cloud is expressed in, default base_link
   output_dir (string)    where .pcd/.ply files are written, default ~/.mrros/clouds
+  mesh_cache_dir (string) where converted .obj meshes are cached, default ~/.mrros/mesh_cache
 """
 
+import asyncio
 import os
 import threading
 
@@ -13,7 +15,8 @@ import rclpy
 from aiohttp import web
 from rclpy.node import Node
 
-from ar_bridge.http_api import Handlers, make_app
+from ar_bridge.http_api import Handlers, MeshResult, make_app
+from ar_bridge.mesh_resolver import MeshCache, resolve_mesh
 
 
 class ARBridge(Node):
@@ -22,18 +25,27 @@ class ARBridge(Node):
         self.declare_parameter("http_port", 8765)
         self.declare_parameter("frame_id", "base_link")
         self.declare_parameter("output_dir", os.path.expanduser("~/.mrros/clouds"))
+        self.declare_parameter("mesh_cache_dir", os.path.expanduser("~/.mrros/mesh_cache"))
 
         self.port = int(self.get_parameter("http_port").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
         self.output_dir = str(self.get_parameter("output_dir").value)
         os.makedirs(self.output_dir, exist_ok=True)
+        self.mesh_cache = MeshCache(str(self.get_parameter("mesh_cache_dir").value))
 
-        # M0: only /health is live. M2b adds get_mesh, M3 adds on_cloud.
-        self.handlers = Handlers()
+        # M3 adds on_cloud; get_mesh (M2b) is live.
+        self.handlers = Handlers(get_mesh=self._get_mesh)
+        distro = os.environ.get("ROS_DISTRO", "?")
         self.get_logger().info(
             f"http on :{self.port}, frame_id={self.frame_id}, out={self.output_dir}, "
-            f"ROS_DISTRO={os.environ.get('ROS_DISTRO', '?')}"
+            f"mesh_cache={self.mesh_cache.cache_dir}, ROS_DISTRO={distro}"
         )
+
+    async def _get_mesh(self, uri: str) -> MeshResult:
+        # trimesh conversion is blocking CPU work; keep it off the event loop so one slow
+        # conversion doesn't stall every other request (including concurrent /health checks).
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, resolve_mesh, uri, self.mesh_cache)
 
     def serve_forever(self) -> None:
         app = make_app(self.handlers, node_name=self.get_name())

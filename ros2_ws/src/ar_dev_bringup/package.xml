@@ -17,6 +17,7 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>ur_description</exec_depend>
   <exec_depend>fanuc_crx_description</exec_depend>
+  <exec_depend>ar_bridge</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 
