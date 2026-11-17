@@ -23,6 +23,20 @@ public extension URDFRobot {
         joint.transform(position: position(of: joint, in: jointPositions))
     }
 
+    /// Pose of every link relative to `frame` (identity at `frame` itself) rather than the
+    /// structural root. Use this for placement/rendering — see `baseFrame` for why the robot's
+    /// *root* and its conventional *base* are not always the same link (e.g. a fixed pedestal
+    /// joint hanging `base_link` off a synthetic `world` link).
+    func linkTransforms(
+        jointPositions: [String: Double],
+        relativeTo frame: String
+    ) -> [String: simd_double4x4] {
+        let rootRelative = linkTransforms(jointPositions: jointPositions)
+        guard let framePose = rootRelative[frame] else { return rootRelative } // unknown frame: no-op
+        let frameInverse = framePose.inverse
+        return rootRelative.mapValues { frameInverse * $0 }
+    }
+
     private func position(of joint: Joint, in positions: [String: Double]) -> Double {
         if let m = joint.mimic {
             return (positions[m.joint] ?? 0) * m.multiplier + m.offset

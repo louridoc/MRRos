@@ -1,18 +1,30 @@
-#if canImport(RealityKit) && os(iOS)
+#if canImport(RealityKit)
     import AlignmentKit
     import Foundation
     import MeshProvider
     import os
     import RealityKit
     import simd
-    import UIKit
-import URDFKit
+    import URDFKit
+
+    #if canImport(UIKit)
+        import UIKit
+
+        typealias PlatformColor = UIColor
+    #elseif canImport(AppKit)
+        import AppKit
+
+        typealias PlatformColor = NSColor
+    #endif
 
     /// A URDF robot as a RealityKit entity tree.
     ///
     /// Layout: `root` (place this in the world) → `rosFrame` (carries the ROS→AR rotation, so
     /// everything below is in plain URDF/ROS coordinates) → one entity per link, positioned with
-    /// the *absolute* link pose from `URDFRobot.linkTransforms`, → one entity per visual.
+    /// the link pose from `URDFRobot.linkTransforms(relativeTo: robot.baseFrame)` — i.e. relative
+    /// to the robot's conventional base, not necessarily its URDF structural root (see
+    /// `URDFRobot.baseFrame`) — so `root` lands exactly where the user placed it, with no offset
+    /// from a synthetic mount/pedestal link above `base_link` → one entity per visual.
     @MainActor
     public final class RobotEntity {
         public let robot: URDFRobot
@@ -55,9 +67,10 @@ import URDFKit
             update(jointPositions: [:])
         }
 
-        /// Re-pose every link from the FK. Call on each joint update (or each frame when smoothing).
+        /// Re-pose every link from the FK, relative to `robot.baseFrame`. Call on each joint
+        /// update (or each frame when smoothing).
         public func update(jointPositions: [String: Double]) {
-            let poses = robot.linkTransforms(jointPositions: jointPositions)
+            let poses = robot.linkTransforms(jointPositions: jointPositions, relativeTo: robot.baseFrame)
             for (name, entity) in linkEntities {
                 if let m = poses[name] {
                     entity.transform = Transform(matrix: m.floatMatrix)
@@ -128,7 +141,7 @@ import URDFKit
         static func simpleMaterial(_ material: URDFKit.Material?) -> SimpleMaterial {
             var m = SimpleMaterial()
             if let rgba = material?.rgba {
-                m.color = .init(tint: UIColor(
+                m.color = .init(tint: PlatformColor(
                     red: CGFloat(rgba.x), green: CGFloat(rgba.y), blue: CGFloat(rgba.z),
                     alpha: CGFloat(rgba.w)
                 ))

@@ -144,6 +144,16 @@ public struct URDFRobot: Sendable {
         joints.filter { $0.type.isActuated && $0.mimic == nil }.map(\.name)
     }
 
+    /// The frame placement/alignment should anchor to — i.e. "where the real robot's base sits",
+    /// not necessarily the URDF's structural root. Several vendor URDFs (FANUC CRX among them)
+    /// hang `base_link` off a synthetic `world`/mount link via a fixed offset (e.g. a 0.75 m
+    /// pedestal joint), so anchoring the structural root makes the robot float or sink by that
+    /// offset. `base_link` is the de facto ROS/MoveIt/RViz convention for "the" robot frame, so we
+    /// prefer it when present and fall back to the structural root for any other URDF.
+    public var baseFrame: String {
+        links["base_link"] != nil ? "base_link" : rootLink
+    }
+
     /// Mesh filenames referenced by visuals (deduplicated, document order).
     public var visualMeshFilenames: [String] {
         var seen = Set<String>()

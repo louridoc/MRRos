@@ -118,7 +118,11 @@ def main() -> None:
             m = meta[r["dst"]]
             if r["ok"]:
                 m.update(
-                    bytes=os.path.getsize(r["dst"]), tris=r["tris"], bbox=r["bbox"], via="scenekit"
+                    bytes=os.path.getsize(r["dst"]),
+                    tris=r["tris"],
+                    bbox=r["bbox"],
+                    via="scenekit",
+                    axis_fix_applied=r.get("wrapped", False),
                 )
                 entries.append(m)
                 print(
@@ -136,6 +140,7 @@ def main() -> None:
                     tris=r["tris"],
                     bbox=r["bbox"],
                     via="trimesh-obj+scenekit",
+                    axis_fix_applied=r.get("wrapped", False),
                 )
                 entries.append(m)
                 mb = m["bytes"] / 1e6

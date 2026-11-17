@@ -53,6 +53,7 @@ struct ParserTests {
         #expect(r.joints.map(\.name) == ["shoulder", "slide", "slide_mimic"])
         #expect(r.actuatedJointNames == ["shoulder", "slide"])
         #expect(r.linkNamesInTreeOrder() == ["base", "arm", "tool", "tool_mimic"])
+        #expect(r.baseFrame == "base", "no link literally named base_link -> falls back to rootLink")
 
         let base = try #require(r.links["base"])
         #expect(base.visuals.first?.material?.rgba == SIMD4(0.5, 0.5, 0.6, 1)) // resolved by name
@@ -124,6 +125,25 @@ struct ParserTests {
             """)
         }
     }
+
+    /// Mirrors FANUC CRX's xacro: a synthetic `world` root offset from the actual robot base via
+    /// a fixed "pedestal" joint. `baseFrame` must resolve to `base_link`, not the structural root.
+    @Test func baseFramePrefersBaseLinkOverStructuralRoot() throws {
+        let r = try URDFParser.parse("""
+        <robot name="pedestal">
+          <link name="world"/><link name="base_link"/><link name="ee_link"/>
+          <joint name="base_joint" type="fixed">
+            <origin xyz="0 0 0.75" rpy="0 0 0"/><parent link="world"/><child link="base_link"/>
+          </joint>
+          <joint name="J1" type="revolute">
+            <parent link="base_link"/><child link="ee_link"/><axis xyz="0 0 1"/>
+            <limit lower="-1" upper="1" effort="1" velocity="1"/>
+          </joint>
+        </robot>
+        """)
+        #expect(r.rootLink == "world")
+        #expect(r.baseFrame == "base_link")
+    }
 }
 
 struct KinematicsTests {
@@ -163,5 +183,29 @@ struct KinematicsTests {
         let r = try URDFParser.parse(twoJointURDF)
         let t = r.linkTransforms(jointPositions: [:])
         #expect(try close(#require(t["tool"]?.translation), SIMD3(0.5, 0, 0.1)))
+    }
+
+    @Test func linkTransformsRelativeToRebasesWithoutChangingRelativePoses() throws {
+        let r = try URDFParser.parse(twoJointURDF)
+        let positions = ["shoulder": Double.pi / 2, "slide": 0.1]
+        let rootRelative = r.linkTransforms(jointPositions: positions)
+        let armRelative = r.linkTransforms(jointPositions: positions, relativeTo: "arm")
+
+        #expect(armRelative["arm"] == matrix_identity_double4x4, "the reference frame is identity")
+        // "base" sits one fixed joint away from "arm" in the root tree; rebasing must move it,
+        // not leave it at the root-relative pose.
+        #expect(armRelative["base"] != rootRelative["base"])
+        // But the pose of "tool" AS SEEN FROM "arm" must be unchanged by the rebasing (it was
+        // already expressed relative to "arm" in the original FK, just also offset by "arm"'s own
+        // root-relative pose on top — rebasing only removes that outer offset).
+        let expectedToolFromArm = try #require(rootRelative["arm"]?.inverse) * #require(rootRelative["tool"])
+        #expect(try close(#require(armRelative["tool"]?.translation), expectedToolFromArm.translation))
+    }
+
+    @Test func linkTransformsRelativeToUnknownFrameIsANoOp() throws {
+        let r = try URDFParser.parse(twoJointURDF)
+        let rootRelative = r.linkTransforms(jointPositions: ["shoulder": 0.3])
+        let sameAsRoot = r.linkTransforms(jointPositions: ["shoulder": 0.3], relativeTo: "no-such-link")
+        #expect(sameAsRoot["arm"] == rootRelative["arm"])
     }
 }
