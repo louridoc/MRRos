@@ -97,7 +97,7 @@ struct PlacementBar: View {
         VStack(spacing: 8) {
             Text(
                 scene.isAligning
-                    ? "Pick an axis below, then drag anywhere — Done when it overlays the real robot."
+                    ? "Pick X (red) or Y (green) and drag along that arrow, or Rotate Z (blue) and drag sideways. Done when it overlays the real robot."
                     : scene.status
             )
             .font(.caption)

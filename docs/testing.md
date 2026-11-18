@@ -259,12 +259,28 @@ the gesture-handling code above it. Restructured so `anchor` is created once at 
 transform and never touched again; a new plain child `Entity` (`alignmentRoot`) holds the robot
 and gizmo, and its LOCAL transform (== world transform, since `anchor` is identity) is what
 `alignment.transform` now drives. A plain `Entity`'s transform has no anchor-tracking behavior
-to fight with. Not yet re-verified on device — if this still doesn't fix it, the "fighting with
-AnchorEntity" theory is wrong and the bug is somewhere not yet identified.
+to fight with. **Confirmed on device: "much better"** — the floor-sinking was the
+`AnchorEntity` mutation all along; the occlusion/ghosting theory (third attempt) was a red herring.
+
+Sixth pass (2026-11-17, user request): move relative to `base_link` with a visible triad.
+- The previous X/Z buttons used AR-convention local axes; in `base_link` Z is up and the
+  horizontal axes are X and Y, so they'd have contradicted a ROS triad. Axes are now
+  `X` / `Y` / `Rotate Z`, computed in `AlignmentKit` (`worldVector(fromBaseLink:)`,
+  `translatedInBaseLink(by:)`) — no axis swap in the app target.
+- `BaseLinkTriad` (red X, green Y, blue Z, 0.4 m) is built in ROS coordinates under an entity
+  carrying `FrameConventions.rosToAR` — the same rotation `RobotEntity` uses. Property test
+  `drawnBaseLinkAxesMatchTheRegistrationFrame` proves a point `v` along the drawn axes registers
+  as `v` through `CloudRegistration`'s path, i.e. triad = robot axes = uploaded cloud frame.
+- X/Y drag is measured along the selected arrow's on-screen projection and scaled by its
+  pixels-per-metre, so the base follows the finger along the arrow; falls back to horizontal
+  drag at 1/1000 m/pt when the axis points at the camera. Rotate uses horizontal drag.
+- While aligning: robot at 45% opacity, selected arrow full / others 30%, and scene occlusion
+  off — the triad sits exactly at the real robot's base, so its LiDAR mesh would hide it.
+- Cone tip orientation verified on the Mac (apex at +Y, centred) rather than on device.
 
 Device drill, not yet (re-)done:
-- [ ] Virtual robot overlays the real one using the X/Z/Rotate axis-select drag
+- [ ] Virtual robot overlays the real one using the X/Y/Rotate Z axis-select drag
 - [ ] A cloud of a box placed at a measured offset appears at that offset in RViz (quantitative
       check — validates the gizmo's resulting transform and the registration path together)
 - [ ] Gesture feel on a real phone (are the 1/1000 m/point and 1/100 rad/point scale factors
-      reasonable, or need tuning for this robot/screen size)
+      reasonable — now only the yaw scale and the foreshortened-axis fallback use them)

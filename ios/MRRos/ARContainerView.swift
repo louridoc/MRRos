@@ -77,15 +77,15 @@ struct ARContainerView: UIViewRepresentable {
         /// identity) is `alignment.transform` — this is the thing the gizmo actually moves.
         /// Holds the robot and the gizmo decoration as ITS children.
         private var alignmentRoot: Entity?
-        /// Visual gizmo (disc + heading arrow) shown while aligning, so there's something on
-        /// screen to look at besides the robot itself — a child of `alignmentRoot`, so it
-        /// tracks position/yaw automatically.
-        private var gizmo: Entity?
+        /// `base_link` triad (red X, green Y, blue Z) shown while aligning — a child of
+        /// `alignmentRoot`, so it sits exactly at the base and turns with it.
+        private var gizmo: BaseLinkTriad?
         /// Where `base_link` is in AR world space — seeded from the placement raycast, then
         /// refined live by the gizmo gestures while `scene.isAligning`. Scan uploads register
         /// against this, recomputed fresh at upload time (see `uploadScan`).
         private var alignment: AlignmentTransform?
         private var wasAligning = false
+        private var highlightedAxis: RobotScene.AlignAxis?
         private var robot: RobotEntity?
         private var mapper: JointStateMapper?
         private var smoother = JointSmoother(tau: 0.06)
@@ -159,9 +159,9 @@ struct ARContainerView: UIViewRepresentable {
 
                 let anchor = AnchorEntity(world: matrix_identity_float4x4)
                 let root = Entity()
-                let gizmo = Self.makeGizmo()
+                let gizmo = BaseLinkTriad()
                 root.addChild(entity.root)
-                root.addChild(gizmo)
+                root.addChild(gizmo.root)
                 anchor.addChild(root)
                 arView.scene.addAnchor(anchor)
 
@@ -171,6 +171,7 @@ struct ARContainerView: UIViewRepresentable {
                 self.anchor = anchor
                 alignmentRoot = root
                 self.gizmo = gizmo
+                highlightedAxis = nil // fresh triad: let syncAligningState highlight it
                 alignment = seeded
                 robot = entity
                 mapper = JointStateMapper(robot: urdf)
@@ -214,60 +215,75 @@ struct ARContainerView: UIViewRepresentable {
 
         // MARK: Alignment gizmo
 
-        /// A translucent cyan disc plus a red heading arrow, both unlit so they read clearly
-        /// regardless of scene lighting — the thing the user actually looks at while aligning,
-        /// since the robot model alone gave no visual sense of "you're in align mode" or which
-        /// way is forward.
-        private static func makeGizmo() -> Entity {
-            let root = Entity()
-            root.name = "alignment-gizmo"
-            let disc = ModelEntity(
-                mesh: .generateCylinder(height: 0.005, radius: 0.22),
-                materials: [UnlitMaterial(color: UIColor.cyan.withAlphaComponent(0.55))]
-            )
-            let arrow = ModelEntity(
-                mesh: .generateBox(size: SIMD3(0.04, 0.012, 0.22)),
-                materials: [UnlitMaterial(color: UIColor.red)]
-            )
-            arrow.position = SIMD3(0, 0.003, -0.15) // offset along local -Z (forward, see yaw convention)
-            root.addChild(disc)
-            root.addChild(arrow)
-            root.isEnabled = false
-            return root
-        }
-
-        /// Called every `updateUIView`; reacts to `scene.isAligning` flipping (show the gizmo)
-        /// rather than a one-shot request, since this is a persistent mode.
+        /// Called every `updateUIView` (which also makes SwiftUI's observation re-run it when
+        /// `isAligning`/`alignAxis` change). Mode entry/exit and axis highlight are separate so
+        /// switching axes doesn't redo the mode toggles.
         func syncAligningState() {
-            guard scene.isAligning != wasAligning else { return }
-            wasAligning = scene.isAligning
-            gizmo?.isEnabled = scene.isAligning
+            if scene.isAligning != wasAligning {
+                wasAligning = scene.isAligning
+                gizmo?.root.isEnabled = scene.isAligning
+                // Translucent robot so the triad at the base reads through it. Occlusion off while
+                // aligning: the triad sits exactly where the REAL robot's base is, so the real
+                // robot's LiDAR occlusion mesh would otherwise hide it.
+                robot?.root.components.set(OpacityComponent(opacity: scene.isAligning ? 0.45 : 1))
+                arView?.environment.sceneUnderstanding.options = scene.isAligning ? [] : [.occlusion]
+            }
+            if scene.alignAxis != highlightedAxis {
+                highlightedAxis = scene.alignAxis
+                gizmo?.highlight(scene.alignAxis)
+            }
         }
 
-        /// Axis-select-then-drag, not a free 2D/3D gesture: `scene.alignAxis` (set by UI
-        /// buttons) picks X / Z / yaw, and a single plain screen-space pan delta moves along
-        /// just that axis — `translation.x` scaled by a constant, the same regardless of which
-        /// axis is selected. No raycasting of any kind is involved, which is deliberate: an
-        /// earlier version raycast the floor under the touch point to drive a free 2D drag, and
-        /// that was unreliable in practice (see the M4 findings in docs/testing.md) — shallow
-        /// viewing angles amplified small finger movements into large jumps, and depended on
-        /// ARKit's plane estimation being accurate exactly where the user was touching.
+        /// Axis-select-then-drag in `base_link` axes. For X/Y the drag is measured ALONG the
+        /// selected arrow as it appears on screen, scaled so the base follows the finger; yaw
+        /// uses plain horizontal drag. No raycasting — see the M4 findings in docs/testing.md
+        /// for why touch-point floor raycasts were abandoned.
         @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
-            guard scene.isAligning, let arView, recognizer.state == .began || recognizer.state == .changed
+            guard scene.isAligning, let arView, let alignment,
+                  recognizer.state == .began || recognizer.state == .changed
             else { return }
-            let dx = Float(recognizer.translation(in: arView).x)
-            recognizer.setTranslation(.zero, in: arView) // consume it — this is a delta, not a total
+            let t = recognizer.translation(in: arView)
+            recognizer.setTranslation(.zero, in: arView) // consume it — a delta, not a total
 
             switch scene.alignAxis {
-            case .x: alignment = alignment?.translatedLocally(byX: dx * Self.panMetersPerPoint)
-            case .z: alignment = alignment?.translatedLocally(byZ: dx * Self.panMetersPerPoint)
-            case .yaw: alignment = alignment?.rotated(byYaw: dx * Self.panRadiansPerPoint)
+            case .x:
+                let m = Self.metres(dragging: t, alongBaseLinkAxis: SIMD3(1, 0, 0), of: alignment, in: arView)
+                self.alignment = alignment.translatedInBaseLink(by: SIMD3(m, 0, 0))
+            case .y:
+                let m = Self.metres(dragging: t, alongBaseLinkAxis: SIMD3(0, 1, 0), of: alignment, in: arView)
+                self.alignment = alignment.translatedInBaseLink(by: SIMD3(0, m, 0))
+            case .yaw:
+                self.alignment = alignment.rotated(byYaw: Float(t.x) * Self.panRadiansPerPoint)
             }
             applyAlignmentToAnchor()
         }
 
-        // Tuned to feel like the reference app's block-alignment drag (same order of magnitude):
-        // ~1000 screen points of drag per metre of translation, ~100 points per radian of yaw.
+        /// How far (metres) a screen drag `t` moves along a `base_link` axis: project a short
+        /// segment of that axis to screen, take the drag's component along it, and divide by the
+        /// segment's on-screen pixels-per-metre — so the base tracks the finger along the arrow
+        /// regardless of distance or viewing angle. Falls back to a fixed horizontal-drag scale
+        /// when the axis is foreshortened (pointing at the camera) or the base is off-screen.
+        private static func metres(
+            dragging t: CGPoint,
+            alongBaseLinkAxis axis: SIMD3<Float>,
+            of alignment: AlignmentTransform,
+            in arView: ARView
+        ) -> Float {
+            let segment: Float = 0.25
+            let tip = alignment.position + alignment.worldVector(fromBaseLink: axis) * segment
+            if let p0 = arView.project(alignment.position), let p1 = arView.project(tip) {
+                let onScreen = SIMD2(Float(p1.x - p0.x), Float(p1.y - p0.y))
+                let pixels = simd_length(onScreen)
+                if pixels > 20 {
+                    let along = simd_dot(SIMD2(Float(t.x), Float(t.y)), onScreen / pixels)
+                    return along * segment / pixels
+                }
+            }
+            return Float(t.x) * panMetersPerPoint
+        }
+
+        // Fallback/yaw scales, same order of magnitude as the reference app's block drag:
+        // ~1000 screen points per metre, ~100 points per radian.
         private static let panMetersPerPoint: Float = 1 / 1000
         private static let panRadiansPerPoint: Float = 1 / 100
 

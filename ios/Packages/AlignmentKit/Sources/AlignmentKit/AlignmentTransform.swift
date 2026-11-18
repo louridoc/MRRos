@@ -42,16 +42,19 @@ public struct AlignmentTransform: Sendable, Equatable {
         AlignmentTransform(position: position + delta, yaw: yaw)
     }
 
-    /// Moves by `(x, z)` expressed in the alignment's OWN local frame (rotated by the current
-    /// `yaw`), not AR world axes — so "move along local X" means the same physical direction
-    /// regardless of how the robot is currently rotated, the way dragging a block by its own
-    /// axis handles does in a typical AR placement UI. Used by the axis-constrained gizmo: the
-    /// user picks an axis button, then a single plain screen-space drag (not a 3D floor
-    /// raycast — see the M4 testing notes on why raycasting the touch point was unreliable)
-    /// moves along just that axis.
-    public func translatedLocally(byX dx: Float = 0, byZ dz: Float = 0) -> AlignmentTransform {
-        let worldDelta = simd_quatf(angle: yaw, axis: SIMD3(0, 1, 0)).act(SIMD3(dx, 0, dz))
-        return translated(by: worldDelta)
+    /// A vector given in `base_link` (ROS convention: X forward, Y left, Z up), expressed in AR
+    /// world space for this alignment — i.e. where the robot's own axes currently point. This is
+    /// what the on-screen triad draws and what the gizmo moves along, so "move along X" means
+    /// the robot's X, the same axis the uploaded cloud's X is in.
+    public func worldVector(fromBaseLink v: SIMD3<Float>) -> SIMD3<Float> {
+        let ar = FrameConventions.rosToARFloat * SIMD4(v, 0)
+        return simd_quatf(angle: yaw, axis: SIMD3(0, 1, 0)).act(SIMD3(ar.x, ar.y, ar.z))
+    }
+
+    /// Moves by `delta` expressed in `base_link` axes. Yaw is unchanged, so translating along
+    /// base X or Y never changes height; a Z component would.
+    public func translatedInBaseLink(by delta: SIMD3<Float>) -> AlignmentTransform {
+        translated(by: worldVector(fromBaseLink: delta))
     }
 
     /// A rotate gesture's delta, in radians about `+Y`.

@@ -20,8 +20,11 @@ final class RobotScene {
     /// `alignAxis` currently selects. See M4 in docs/PLAN.md.
     var isAligning = false
 
+    /// Degrees of freedom in `base_link` (ROS convention, matching the red/green/blue triad
+    /// drawn at the base): translate along base X or Y, or rotate about base Z (up). Base Z
+    /// translation is deliberately absent — the base sits on the floor.
     enum AlignAxis: String, CaseIterable, Identifiable {
-        case x = "X", z = "Z", yaw = "Rotate"
+        case x = "X", y = "Y", yaw = "Rotate Z"
         var id: String {
             rawValue
         }
