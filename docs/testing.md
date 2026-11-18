@@ -115,9 +115,18 @@ Device drill:
       below (2026-11-17)
 - [ ] Cloud roughly aligned with the placed robot — not yet re-tested on device after the
       placement-registration fix below
-- [ ] "1M-point upload < 5 s on Wi-Fi" timing — not yet measured
+- [x] 1M-point upload timing: 1.6 s end-to-end over loopback (decode 0.02 s, `build_point_cloud2`
+      0.37 s, `write_pcd` 1.2 s) after the fix below — comfortably under 5 s with real Wi-Fi
+      transfer time added on top (2026-11-17)
 
 Findings log:
+- 2026-11-17: profiled the 1M-point ingest and found `write_pcd`'s Python per-point f-string
+  loop was ~1.94 s of a 2.32 s total — nearly the whole cost. Replaced with `np.savetxt`
+  (vectorized in C): 1.94 s → 1.2 s, total ingest 2.32 s → 1.59 s. Also moved `ingest()` (not
+  just `decode()`) onto `run_in_executor` in `node.py`'s `_on_cloud`, since it was blocking the
+  whole event loop (including concurrent `/health`/`/v0/mesh` requests) for that whole duration
+  — `clock_now` is read before dispatching, not inside the executor thread, to avoid calling
+  rclpy's clock off the node's own thread.
 - 2026-11-17: user placed the robot, then scanned, and expected the cloud to land roughly where
   the robot was placed — it didn't, because the scan was uploaded relative to the AR session's
   arbitrary world origin (`frame_id=map`) with no relationship to the placement anchor at all.

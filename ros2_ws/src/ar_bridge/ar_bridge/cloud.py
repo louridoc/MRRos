@@ -68,9 +68,9 @@ def write_pcd(cloud: DecodedCloud, path: Path) -> None:
     ]
     with path.open("w") as f:
         f.write("\n".join(lines) + "\n")
-        for i in range(n):
-            x, y, z = cloud.xyz[i]
-            f.write(f"{x} {y} {z}\n")
+        # A Python-level per-point f-string loop took ~2s at 1M points (measured) — almost all
+        # of this function's cost and most of the whole ingest. np.savetxt formats in C instead.
+        np.savetxt(f, cloud.xyz, fmt="%.9g")
 
 
 def ingest(

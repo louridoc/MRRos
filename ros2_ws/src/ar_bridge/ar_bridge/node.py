@@ -81,12 +81,19 @@ class ARBridge(Node):
             decoded = merge(self._clouds[name], decoded)
         self._clouds[name] = decoded
 
-        result = ingest(
-            decoded,
-            frame_id=frame_id,
-            output_dir=self.output_dir,
-            name=name,
-            clock_now=self.get_clock().now().to_msg(),
+        # PCD writing is the dominant cost at scan scale (~2s/1M points even vectorized) — keep
+        # it off the event loop too, same reasoning as decode() above. clock_now is read here,
+        # not inside the executor thread, to avoid calling rclpy's clock off the node's own thread.
+        clock_now = self.get_clock().now().to_msg()
+        result = await loop.run_in_executor(
+            None,
+            lambda: ingest(
+                decoded,
+                frame_id=frame_id,
+                output_dir=self.output_dir,
+                name=name,
+                clock_now=clock_now,
+            ),
         )
         self.cloud_pub.publish(result.message)
         self.get_logger().info(
