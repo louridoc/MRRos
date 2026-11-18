@@ -269,7 +269,10 @@ struct ARContainerView: UIViewRepresentable {
             // anchor being replaced, which must not satisfy the capture check.
             let anchor = ARAnchor(name: AlignmentStore.anchorName, transform: alignment.transform)
             arView.session.add(anchor: anchor)
-            pendingSave = (SavedAlignmentInfo(robotName: scene.placedRobotName, savedAt: Date()), anchor.identifier)
+            pendingSave = (
+                SavedAlignmentInfo(robotName: scene.placedRobotName, savedAt: Date()),
+                anchor.identifier
+            )
             scene.status = "Saving alignment…"
         }
 
@@ -288,7 +291,8 @@ struct ARContainerView: UIViewRepresentable {
                     // Exactly the anchor just placed — not a stale one, not two of them.
                     let robotAnchors = map.anchors.filter { $0.name == AlignmentStore.anchorName }
                     guard robotAnchors.count == 1, robotAnchors[0].identifier == anchorID else {
-                        throw AlignmentStoreError.corrupt("world map was captured without the current robot anchor")
+                        throw AlignmentStoreError
+                            .corrupt("world map was captured without the current robot anchor")
                     }
                     let data = try NSKeyedArchiver.archivedData(
                         withRootObject: map,
@@ -519,14 +523,20 @@ struct ARContainerView: UIViewRepresentable {
 
         private static func worldVertices(of meshAnchor: ARMeshAnchor) -> [SIMD3<Float>] {
             let source = meshAnchor.geometry.vertices
+            guard source.format == .float3 else { return [] }
             let transform = meshAnchor.transform
             var points: [SIMD3<Float>] = []
             points.reserveCapacity(source.count)
-            let buffer = source.buffer.contents()
+            let base = UnsafeRawPointer(source.buffer.contents()).advanced(by: source.offset)
             for i in 0 ..< source.count {
-                let vertexPointer = buffer.advanced(by: source.offset + i * source.stride)
-                let local = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
-                let world = transform * SIMD4(local, 1)
+                // ARKit packs vertices as 3 floats (12 bytes). Never read them as SIMD3<Float>:
+                // that type is 16 bytes / 16-aligned, so it misaligns and over-reads the last
+                // vertex past the buffer end — EXC_BAD_ACCESS whenever that end hits a page
+                // boundary (crashed on a ~98k-point scan).
+                let (x, y, z) = base.loadUnaligned(
+                    fromByteOffset: i * source.stride, as: (Float, Float, Float).self
+                )
+                let world = transform * SIMD4(x, y, z, 1)
                 points.append(SIMD3(world.x, world.y, world.z))
             }
             return points

@@ -353,3 +353,8 @@ Findings log:
 - 2026-11-18: a MoveIt started after an upload never sees it; a cloud arriving in move_group's
   first seconds isn't self-filtered (silently). Drives the M5c "clear-then-publish, repeatedly"
   design.
+- 2026-11-18 (M3 bug, found during an M5 device test): EXC_BAD_ACCESS in `worldVertices` on a
+  ~98k-point scan. Vertices were read as `SIMD3<Float>` (16 bytes, 16-aligned) from ARKit's packed
+  `.float3` buffer (12-byte stride): misaligned reads, and the last vertex over-read 4 bytes past
+  the buffer — crashing only when that end landed on a page boundary, so M3's smaller scans never
+  hit it. Now reads 3 unaligned `Float`s per vertex and checks the source format.
