@@ -8,6 +8,8 @@ current pose — what a real LiDAR scan of the robot looks like — then checks:
   1. the sweep's halfway configuration goes from valid → in collision   (cloud reached MoveIt)
   2. the start configuration stays valid                                 (robot filtered out)
   3. MoveIt finds a plan to the goal and every waypoint is collision-free
+  4. with --execute: MoveIt executes it (mock_joints' fake controller) and /joint_states ends at
+     the goal — bringup with moveit:=true frozen:=true (a sweeping robot fails the start check)
 
   tools/ros.sh jazzy python tools/moveit_scene_check.py --robot ur10e --ar-bridge http://localhost:8766
 
@@ -27,8 +29,10 @@ import numpy as np
 import rclpy
 import trimesh
 from ament_index_python.packages import get_package_share_directory
+from moveit_msgs.action import ExecuteTrajectory
 from moveit_msgs.msg import Constraints, JointConstraint, MotionPlanRequest, RobotState
 from moveit_msgs.srv import GetMotionPlan, GetStateValidity
+from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
@@ -171,12 +175,13 @@ def robot_surface_points(node: Check, per_link: int = 60) -> np.ndarray:
     return np.concatenate(pts)
 
 
-def wall(arm_az: float) -> np.ndarray:
-    # Vertical half-plane through the base axis at arm_az + 45°, r in [0.5, 1.5], z in [0, 1.2]:
-    # blocks a horizontal base swing but leaves an arm-upright corridor (r < 0.5) open. 0.5 not
-    # 0.35: the CRX's shoulder housing sits ~0.3 m off the base axis and sweeps that circle.
-    az = arm_az + math.radians(45)
-    r, z = np.meshgrid(np.arange(0.5, 1.5, 0.02), np.arange(0.0, 1.2, 0.02))
+def wall(arm_az: float, side: float) -> np.ndarray:
+    # Vertical half-plane through the base axis at arm_az ± 45°, r in [0.7, 1.5], z in [0, 1.2]:
+    # blocks a horizontal base swing but leaves an arm-upright corridor (r < 0.7) open. The CRX's
+    # shoulder housing sits ~50° to one side of the arm's direction, out to ~0.5 m: it trails the
+    # arm swinging one way but leads (and would start inside a 0.5 m corridor) swinging the other.
+    az = arm_az + side * math.radians(45)
+    r, z = np.meshgrid(np.arange(0.7, 1.5, 0.02), np.arange(0.0, 1.2, 0.02))
     return np.stack([r.ravel() * math.cos(az), r.ravel() * math.sin(az), z.ravel()], axis=1)
 
 
@@ -185,10 +190,13 @@ def main() -> int:
     ap.add_argument("--robot", required=True)
     ap.add_argument("--ar-bridge", default="http://localhost:8765")
     ap.add_argument(
+        "--execute", action="store_true", help="also execute the plan (fake controller)"
+    )
+    ap.add_argument(
         "--settle",
         type=float,
-        default=10.0,
-        help="seconds to wait after MoveIt's services appear before uploading (see docstring)",
+        default=0.0,
+        help="optional wait after MoveIt's services appear before uploading",
     )
     args = ap.parse_args()
     spec = ROBOTS[args.robot]
@@ -199,9 +207,7 @@ def main() -> int:
     for c in (node.validity, node.planner, node.clear):
         if not c.wait_for_service(timeout_sec=30):
             raise TimeoutError(f"{c.srv_name} (is moveit.launch.py running?)")
-    # A cloud that arrives in the first seconds after move_group starts is NOT self-filtered,
-    # silently (found in M5a): the robot's own points land in the octomap and the start pose
-    # reads as in collision. Wait it out here; the M5c adapter needs a real fix.
+    # Not needed since ar_bridge stamps clouds 0 (see node.py); kept for experiments.
     time.sleep(args.settle)
 
     start = {
@@ -212,8 +218,11 @@ def main() -> int:
     pan = spec.joint_names[0]
     # Wall at +45° of base rotation; goal at +120° so arms with a sideways offset from the base
     # axis (the CRX) clear the wall at the goal — a +90° goal clipped it.
-    goal = dict(start, **{pan: start[pan] + math.radians(120)})
-    halfway = dict(start, **{pan: start[pan] + math.pi / 4})
+    # Swing toward the side with room left in the joint range: after an --execute run the arm
+    # is held at the previous goal, and +120° more would leave a ±180° base joint's limits.
+    side = -1.0 if start[pan] > 0 else 1.0
+    goal = dict(start, **{pan: start[pan] + side * math.radians(120)})
+    halfway = dict(start, **{pan: start[pan] + side * math.pi / 4})
 
     # TF only arrives while the node spins, so wait (spinning) for every link with collision
     # geometry rather than sleeping.
@@ -232,9 +241,7 @@ def main() -> int:
     robot = robot_surface_points(node)
     reach = robot[np.hypot(robot[:, 0], robot[:, 1]) > 0.3]  # the arm, not the base column
     if len(reach) == 0:
-        raise SystemExit(
-            "arm is upright: start the bringup with positions:= so it reaches out"
-        )
+        raise SystemExit("arm is upright: start the bringup with positions:= so it reaches out")
     arm_az = math.atan2(reach[:, 1].mean(), reach[:, 0].mean())
     print(f"sampled {len(robot)} points on the robot's collision surfaces")
 
@@ -243,7 +250,7 @@ def main() -> int:
     results = {}
     results["halfway valid before upload"] = node.valid(halfway)
 
-    pts = np.concatenate([wall(arm_az), robot]).astype(np.float32)
+    pts = np.concatenate([wall(arm_az, side), robot]).astype(np.float32)
     req = urllib.request.Request(
         f"{args.ar_bridge}/v0/cloud?frame_id=base_link&name=moveit_check",
         data=ply.encode(pts),
@@ -281,6 +288,26 @@ def main() -> int:
         waypoints = [dict(zip(traj.joint_names, p.positions, strict=True)) for p in traj.points]
         results["every waypoint collision-free"] = all(node.valid(w) for w in waypoints)
         print(f"plan: {len(waypoints)} waypoints, planning time {res.planning_time:.2f}s")
+
+    if args.execute and results["plan found"]:
+        executor = ActionClient(node, ExecuteTrajectory, "/execute_trajectory")
+        if not executor.wait_for_server(timeout_sec=10):
+            raise TimeoutError("/execute_trajectory")
+        sent = executor.send_goal_async(ExecuteTrajectory.Goal(trajectory=res.trajectory))
+        node.wait(sent.done, 10, "execute goal accepted")
+        done = sent.result().get_result_async()
+        node.wait(done.done, 120, "trajectory execution")
+        results["executed (MoveIt reports success)"] = done.result().result.error_code.val == 1
+
+        def at_goal():
+            now = dict(zip(node.joints.name, node.joints.position, strict=True))
+            return all(abs(now[n] - p) < 0.02 for n, p in goal.items())
+
+        try:
+            node.wait(at_goal, 5, "joint_states at goal")
+            results["/joint_states reached the goal"] = True
+        except TimeoutError:
+            results["/joint_states reached the goal"] = False
 
     for k, v in results.items():
         print(f"  [{'PASS' if v else 'FAIL'}] {k}")

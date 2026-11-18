@@ -25,11 +25,15 @@ Findings that shape M5c **[verified]**:
 
 1. **A MoveIt started after an upload never sees that upload.** The updater's subscription doesn't
    get the latched (`TRANSIENT_LOCAL`) message; re-publishing made the obstacle appear at once.
-2. **A cloud arriving in move_group's first seconds is silently not self-filtered** — the robot's
-   own voxels land in the octomap (start pose reads as in collision) and later clouds don't remove
-   them. The same cloud ~10 s later filters correctly.
-3. ⇒ `ar_bridge` should **clear the octomap, then publish** on every upload, again whenever
-   move_group (re)appears, and periodically, so a bad early insert is corrected on the next cycle.
+2. ~~A cloud arriving in move_group's first seconds is silently not self-filtered.~~ **Root cause
+   found and fixed (2026-11-18):** the self-filter looks up every robot link's TF at the cloud's
+   *exact* stamp; ar_bridge stamped it "now", often a few ms newer than the last 30 Hz joint TF, so
+   lookups failed ("shape_mask: Missing transform") and those links weren't filtered — at startup
+   always, later intermittently. ar_bridge now stamps the static cloud **0 = latest transform**
+   (the robot doesn't move during a scan). Verified: 9/9 runs on CRX + UR with no settle wait,
+   including right after startup, zero missing-transform errors.
+3. ⇒ `ar_bridge` should **clear the octomap, then publish** on every upload and again whenever
+   move_group (re)appears (finding 1). The periodic refresh is no longer needed for finding 2.
 
 End-to-end result **[verified]**, both priority vendors: a wall uploaded through ar_bridge's HTTP
 endpoint (the app's path) makes the blocked configuration invalid, the robot's own surface points
@@ -92,6 +96,6 @@ tools/ros.sh jazzy python tools/moveit_scene_check.py --robot ur10e
 
 - **M5b** (in-app): keep the self-filter on the phone too (preview, and for non-MoveIt backends),
   plus crop/delete edits — MoveIt's filter is necessary but has the startup blind spot above.
-- **M5c** (adapters): (a) MoveIt — ar_bridge does clear-then-publish on upload, on move_group
-  (re)appearing, and periodically; (b) cuRobo/nvblox — spike on the GPU machine: mesh upload →
+- **M5c** (adapters): (a) MoveIt — ar_bridge does clear-then-publish on upload and on
+  move_group (re)appearing; (b) cuRobo/nvblox — spike on the GPU machine: mesh upload →
   CollisionObject, and/or depth-frame streaming into nvblox.

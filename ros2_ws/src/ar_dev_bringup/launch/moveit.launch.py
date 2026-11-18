@@ -1,5 +1,9 @@
-"""MoveIt move_group for the dev bringup's robot — planning only — with MoveIt's point-cloud
-octomap updater fed by ar_bridge's /mrros/static_cloud (see config/sensors_3d.yaml).
+"""MoveIt move_group for the dev bringup's robot, with MoveIt's point-cloud octomap updater fed
+by ar_bridge's /mrros/static_cloud (see config/sensors_3d.yaml).
+
+execute:=true (default) points MoveIt at mock_joints' fake FollowJointTrajectory controller, so
+"Plan & Execute" plays the trajectory onto /joint_states — the RViz robot and the AR robot move.
+Simulation only. execute:=false is planning-only (no controllers).
 
 Run alongside the dev bringup, same robot:
   ros2 launch ar_dev_bringup dev.launch.py robot:=ur10e rviz:=false
@@ -63,15 +67,16 @@ def _setup(context, *args, **kwargs):
         "octomap_resolution": float(LaunchConfiguration("octomap_resolution").perform(context)),
     }
 
+    parameters = [moveit_config.to_dict(), octomap, {"publish_robot_description_semantic": True}]
+    if LaunchConfiguration("execute").perform(context) == "true":
+        # Later dicts override earlier ones: replaces moveit_controllers_none.yaml's empty manager.
+        parameters.append(_mock_controller(list(spec.joint_names)))
+
     move_group = Node(
         package="moveit_ros_move_group",
         executable="move_group",
         output="screen",
-        parameters=[
-            moveit_config.to_dict(),
-            octomap,
-            {"publish_robot_description_semantic": True},
-        ],
+        parameters=parameters,
     )
     rviz = Node(
         package="rviz2",
@@ -91,11 +96,35 @@ def _setup(context, *args, **kwargs):
     return [move_group, rviz]
 
 
+def _mock_controller(joints: list[str]) -> dict:
+    """MoveIt controller config for mock_joints' fake controller (same name as its default
+    `controller_name` parameter)."""
+    return {
+        "moveit_controller_manager": (
+            "moveit_simple_controller_manager/MoveItSimpleControllerManager"
+        ),
+        "moveit_simple_controller_manager": {
+            "controller_names": ["mrros_mock_controller"],
+            "mrros_mock_controller": {
+                "type": "FollowJointTrajectory",
+                "action_ns": "follow_joint_trajectory",
+                "default": True,
+                "joints": joints,
+            },
+        },
+    }
+
+
 def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             DeclareLaunchArgument("robot", default_value=DEFAULT_ROBOT, choices=sorted(ROBOTS)),
             DeclareLaunchArgument("rviz", default_value="true"),
+            DeclareLaunchArgument(
+                "execute",
+                default_value="true",
+                description="fake trajectory execution via mock_joints (false = planning only)",
+            ),
             DeclareLaunchArgument("octomap_frame", default_value="base_link"),
             DeclareLaunchArgument("octomap_resolution", default_value="0.02"),
             OpaqueFunction(function=_setup),

@@ -19,7 +19,8 @@ Body: binary PLY (little-endian, `x y z` float32, optional `confidence` uint8, o
 | `mode` | no | `replace` (default, overwrites `name`'s accumulator) or `append` (concatenates onto whatever was last stored under `name`; missing `confidence`/`color` columns on either side are backfilled with 0/black rather than dropped — see `ply.merge`) |
 
 Always publishes the single latched `/mrros/static_cloud` topic (`sensor_msgs/PointCloud2`,
-`TRANSIENT_LOCAL` + `RELIABLE` QoS) regardless of `name` — `name` only selects the `.pcd` file
+`TRANSIENT_LOCAL` + `RELIABLE` QoS, header stamp **0** = "use the latest transform" since the
+scan is static — a "now" stamp raced TF in MoveIt's self-filter, see docs/testing.md M5) regardless of `name` — `name` only selects the `.pcd` file
 and the append accumulator, not which topic gets the update. The iOS app accumulates and
 voxel-filters client-side across multiple captures and always uploads with a fixed
 `name="live_scan"` + `mode=replace`, so one upload call fully replaces both the topic and that

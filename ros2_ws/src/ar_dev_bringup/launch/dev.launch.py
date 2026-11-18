@@ -123,7 +123,11 @@ def _setup(context, *args, **kwargs):
                 get_package_share_directory("ar_dev_bringup"), "launch", "moveit.launch.py"
             )
         ),
-        launch_arguments={"robot": robot_key, "rviz": LaunchConfiguration("rviz")}.items(),
+        launch_arguments={
+            "robot": robot_key,
+            "rviz": LaunchConfiguration("rviz"),
+            "execute": LaunchConfiguration("execute"),
+        }.items(),
         condition=IfCondition(LaunchConfiguration("moveit")),
     )
     return [rsp, mock, map_to_world, rosbridge, rviz, ar_bridge, moveit]
@@ -147,6 +151,11 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("ar_bridge_port", default_value="8765"),
             DeclareLaunchArgument(
                 "moveit", default_value="false", description="also launch move_group (M5)"
+            ),
+            DeclareLaunchArgument(
+                "execute",
+                default_value="true",
+                description="with moveit:=true, let Plan & Execute drive mock_joints (simulation)",
             ),
             OpaqueFunction(function=_setup),
         ]

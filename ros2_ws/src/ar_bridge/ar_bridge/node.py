@@ -15,6 +15,7 @@ from pathlib import Path
 
 import rclpy
 from aiohttp import web
+from builtin_interfaces.msg import Time
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import PointCloud2
@@ -82,9 +83,13 @@ class ARBridge(Node):
         self._clouds[name] = decoded
 
         # PCD writing is the dominant cost at scan scale (~2s/1M points even vectorized) — keep
-        # it off the event loop too, same reasoning as decode() above. clock_now is read here,
-        # not inside the executor thread, to avoid calling rclpy's clock off the node's own thread.
-        clock_now = self.get_clock().now().to_msg()
+        # it off the event loop too, same reasoning as decode() above.
+        #
+        # Stamp 0 = "use the latest transform": this is static data (the robot doesn't move during
+        # a scan). Stamping it "now" raced TF — MoveIt's self-filter looks up every robot link at
+        # the cloud's exact stamp, which is often a few ms newer than the last 30 Hz joint TF, so
+        # some links weren't filtered and the robot collided with its own scan, intermittently.
+        stamp = Time()
         result = await loop.run_in_executor(
             None,
             lambda: ingest(
@@ -92,7 +97,7 @@ class ARBridge(Node):
                 frame_id=frame_id,
                 output_dir=self.output_dir,
                 name=name,
-                clock_now=clock_now,
+                clock_now=stamp,
             ),
         )
         self.cloud_pub.publish(result.message)

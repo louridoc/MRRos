@@ -358,3 +358,27 @@ Findings log:
   `.float3` buffer (12-byte stride): misaligned reads, and the last vertex over-read 4 bytes past
   the buffer — crashing only when that end landed on a page boundary, so M3's smaller scans never
   hit it. Now reads 3 unaligned `Float`s per vertex and checks the source format.
+
+## M5 — Fake trajectory execution (dev-only)
+`mock_joints` is now also a fake `FollowJointTrajectory` controller
+(`mrros_mock_controller/follow_joint_trajectory`): trajectories are played back onto
+`/joint_states` (linear interpolation, final pose held; preempt/cancel supported) and MoveIt is
+configured to use it with `moveit.launch.py execute:=true` (default; `false` = planning only).
+Simulation only — real motion commands remain a v1 non-goal. Playback logic is rclpy-free
+(`trajectory_playback.py`) with pytest coverage.
+
+Automated: `tools/moveit_scene_check.py --execute` additionally executes the plan and asserts MoveIt
+reports success and `/joint_states` ends at the goal.
+- [x] CRX-30iA — 5/5 back-to-back runs, no settle wait, first right after startup (2026-11-18)
+- [x] UR10e — 4/4 same conditions (2026-11-18)
+- [ ] Device: Plan & Execute in RViz moves the AR robot on the phone (follows /joint_states)
+
+Findings log:
+- 2026-11-18: repeated --execute runs failed in three ways, two of them test geometry: the next run
+  starts at the last goal, so +120° more left the CRX's ±180° J1 range (script now swings toward the
+  side with room); swinging the other way, the CRX's shoulder housing (~50° off the arm direction,
+  out to ~0.5 m) leads instead of trails and started inside a 0.5 m corridor (→ 0.7 m).
+- 2026-11-18: the third was real and is the root cause of M5a's "first seconds" finding: an
+  intermittent `shape_mask: Missing transform` — the self-filter looks up robot link TF at the
+  cloud's exact stamp, which ar_bridge set to "now", often newer than the last joint TF. ar_bridge
+  now stamps the static cloud 0 (latest transform). 0 missing-transform errors in 9 runs since.
