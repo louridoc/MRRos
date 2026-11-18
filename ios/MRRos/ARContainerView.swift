@@ -10,6 +10,7 @@ import RealityKit
 import RobotModel
 import ROSMessages
 import SwiftUI
+import UIKit
 import URDFKit
 
 /// RealityKit AR session with scene reconstruction, hosting the robot entity.
@@ -69,6 +70,10 @@ struct ARContainerView: UIViewRepresentable {
         private let scanScene: ScanScene
         private weak var arView: ARView?
         private var anchor: AnchorEntity?
+        /// Visual gizmo (disc + heading arrow) shown at the anchor while aligning, so there's
+        /// something on screen to look at besides the robot itself — a child of `anchor`, so it
+        /// tracks position/yaw automatically.
+        private var gizmo: Entity?
         /// Where `base_link` is in AR world space — seeded from the placement raycast, then
         /// refined live by the gizmo gestures while `scene.isAligning`. Scan uploads register
         /// against this, recomputed fresh at upload time (see `uploadScan`).
@@ -146,8 +151,11 @@ struct ARContainerView: UIViewRepresentable {
                 guard !Task.isCancelled, let arView = self.arView else { return }
                 let anchor = AnchorEntity(world: hit.worldTransform)
                 anchor.addChild(entity.root)
+                let gizmo = Self.makeGizmo()
+                anchor.addChild(gizmo)
                 arView.scene.addAnchor(anchor)
                 self.anchor = anchor
+                self.gizmo = gizmo
                 alignment = AlignmentTransform.from(worldTransform: hit.worldTransform)
                 robot = entity
                 mapper = JointStateMapper(robot: urdf)
@@ -177,6 +185,7 @@ struct ARContainerView: UIViewRepresentable {
                 arView?.scene.removeAnchor(anchor)
             }
             anchor = nil
+            gizmo = nil
             alignment = nil
             robot = nil
             mapper = nil
@@ -189,23 +198,66 @@ struct ARContainerView: UIViewRepresentable {
 
         // MARK: Alignment gizmo
 
-        /// Called every `updateUIView`; reacts to `scene.isAligning` flipping (ghost the robot
-        /// while aligning) rather than a one-shot request, since this is a persistent mode.
+        /// A translucent cyan disc plus a red heading arrow, both unlit so they read clearly
+        /// regardless of scene lighting — the thing the user actually looks at while aligning,
+        /// since the robot model alone gave no visual sense of "you're in align mode" or which
+        /// way is forward.
+        private static func makeGizmo() -> Entity {
+            let root = Entity()
+            root.name = "alignment-gizmo"
+            let disc = ModelEntity(
+                mesh: .generateCylinder(height: 0.005, radius: 0.22),
+                materials: [UnlitMaterial(color: UIColor.cyan.withAlphaComponent(0.55))]
+            )
+            let arrow = ModelEntity(
+                mesh: .generateBox(size: SIMD3(0.04, 0.012, 0.22)),
+                materials: [UnlitMaterial(color: UIColor.red)]
+            )
+            arrow.position = SIMD3(0, 0.003, -0.15) // offset along local -Z (forward, see yaw convention)
+            root.addChild(disc)
+            root.addChild(arrow)
+            root.isEnabled = false
+            return root
+        }
+
+        /// Called every `updateUIView`; reacts to `scene.isAligning` flipping (show the gizmo,
+        /// lightly dim the robot) rather than a one-shot request, since this is a persistent mode.
         func syncAligningState() {
             guard scene.isAligning != wasAligning else { return }
             wasAligning = scene.isAligning
-            robot?.root.components.set(OpacityComponent(opacity: scene.isAligning ? 0.4 : 1.0))
+            gizmo?.isEnabled = scene.isAligning
+            // Light dimming, not a heavy ghost — the user needs to clearly see the model to
+            // judge overlap against the real robot, not just a vague translucent blob.
+            robot?.root.components.set(OpacityComponent(opacity: scene.isAligning ? 0.75 : 1.0))
         }
 
         @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
-            guard scene.isAligning, anchor != nil, let arView, recognizer.state == .changed else { return }
-            let point = recognizer.location(in: arView)
-            guard let hit = arView.raycast(from: point, allowing: .estimatedPlane, alignment: .horizontal)
-                .first
-            else { return }
-            let t = hit.worldTransform.columns.3
-            alignment?.position = SIMD3(t.x, t.y, t.z)
+            guard scene.isAligning, let arView, let alignment, recognizer.state == .changed,
+                  let p = Self.intersection(
+                      ofRayThrough: recognizer.location(in: arView),
+                      in: arView,
+                      atHeight: alignment.position.y
+                  ) else { return }
+            self.alignment?.position = p
             applyAlignmentToAnchor()
+        }
+
+        /// Where the camera ray through `point` crosses the horizontal plane `y = height`, in AR
+        /// world space. Deliberately NOT `arView.raycast(..., allowing: .estimatedPlane, ...)`:
+        /// that can return a hit on a different/spurious plane (e.g. LiDAR mesh noise just under
+        /// the true floor), which was dropping the robot below the floor on every touch. Pure
+        /// ray/plane math against the robot's own current height has no such failure mode.
+        private static func intersection(
+            ofRayThrough point: CGPoint,
+            in arView: ARView,
+            atHeight height: Float
+        )
+            -> SIMD3<Float>?
+        {
+            guard let ray = arView.ray(through: point), abs(ray.direction.y) > 1e-5 else { return nil }
+            let t = (height - ray.origin.y) / ray.direction.y
+            guard t > 0 else { return nil } // plane behind the camera
+            return ray.origin + ray.direction * t
         }
 
         @objc func handleRotation(_ recognizer: UIRotationGestureRecognizer) {

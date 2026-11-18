@@ -187,10 +187,26 @@ Built this pass:
   it's visually obvious you're comparing against the camera passthrough, not just looking at an
   opaque model; reverts to opaque on "Done".
 
-Device drill: **not yet done.** Still open — all three manual checklist items from
-`docs/PLAN.md`'s M4 row:
+Device drill, first attempt (2026-11-17): three real problems, all fixed same session, not yet
+re-verified on device:
+- **No visible gizmo** — there was nothing on screen indicating align mode or offering something
+  to look at besides the robot itself. Added an actual gizmo entity (translucent cyan disc +
+  red heading arrow, `UnlitMaterial` so it reads regardless of scene lighting), child of the
+  placement anchor so it tracks position/yaw automatically, shown only while aligning.
+- **Robot too transparent** — 40% opacity made it hard to actually judge overlap against the
+  real robot. Raised to 75%; the gizmo (not heavy ghosting) is now what signals "you're in align
+  mode."
+- **Robot drops below the floor on touch** — the real bug. `handlePan` re-raycasted
+  `.estimatedPlane` at the touch point on every move; ARKit's plane *estimation* (not just
+  detection) can return a hit on a different, spurious, or lower-than-true-floor plane,
+  especially right where the user is touching to "grab" the robot. Replaced with deterministic
+  ray/plane math: intersect the camera ray through the touch point with the horizontal plane at
+  the robot's own current height (`ARView.ray(through:)`, no ARKit plane detection involved at
+  all) — the Y coordinate can no longer drift from a bad plane hit.
+
+Device drill, not yet (re-)done:
 - [ ] Virtual robot overlays the real one after dragging/rotating with the gizmo
 - [ ] A cloud of a box placed at a measured offset appears at that offset in RViz (quantitative
       check — validates the gizmo's resulting transform and the registration path together)
-- [ ] Gesture feel on a real phone (pan precision, rotation sign/direction, whether raycasting
-      the floor on every pan sample feels responsive)
+- [ ] Gesture feel on a real phone (pan precision, rotation sign/direction, whether the new
+      ray-plane pan feels responsive)
