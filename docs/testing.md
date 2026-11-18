@@ -287,3 +287,37 @@ Device drill, not yet (re-)done:
 - [ ] A cloud of a box placed at a measured offset appears at that offset in RViz (quantitative
       check — validates the gizmo's resulting transform and the registration path together)
 - [x] Gesture feel on a real phone — "works great" (2026-11-17)
+
+## M4b — Save/restore alignment (ARWorldMap)
+Design: on "Done" aligning, an `ARAnchor` named `mrros.base_link` is placed at the aligned pose
+and ARKit's world map (which carries it) is archived to `Application Support/MRRos/alignment`
+with JSON metadata (robot name, time). "Restore saved" re-runs the session with
+`initialWorldMap` and rebuilds the robot at that anchor once tracking is `.normal` again.
+Restoring from the anchor (not a stored pose) lets ARKit's own map refinement carry over.
+Choices: restore is a button, not automatic at launch (relocalizing resets the session and just
+waits if you're elsewhere); save is automatic on Done but only when `worldMappingStatus` is
+`.mapped`/`.extending`; one slot. A restore clears the in-progress scan.
+
+Automated: `tools/ios-test.sh AlignmentKit` — `AlignmentStore` (platform-neutral; the map is
+opaque `Data` there): empty → nothing to restore, save/load round-trip, overwrite, clear is
+idempotent, metadata without a map → `.corrupt`, unreadable metadata → treated as nothing saved.
+The `ARWorldMap` archive/relocalization itself is device-only (no simulator/Mac equivalent).
+
+Races caught in self-review before any device test:
+- For a moment after `session.run(..., .resetTracking)` `currentFrame` can still be from the
+  OLD session — tracking `.normal`, possibly holding an earlier base_link anchor — which would
+  have "restored" instantly in the wrong frame. Frames older than the restore are now ignored.
+- Replacing the anchor before a save is a remove + add, but frames from before that call still
+  contain the old anchor. The save now tracks the new anchor by identifier and rejects a map
+  unless it holds exactly that one robot anchor.
+
+Device drill:
+- [ ] Align → Done saves ("Alignment saved"); if it says "hasn't mapped enough", walk around the
+      robot and Done again
+- [ ] Kill the app, relaunch, connect → "Restore saved · <robot> · <time>" appears
+- [ ] Restore → "Relocalizing…" → robot reappears overlaying the real one (status says
+      "restored — check it overlays the real robot")
+- [ ] Restore while pointing somewhere unrelated stays "Relocalizing…"; tapping Place robot
+      abandons the restore cleanly
+- [ ] Forget (ⓧ) removes the restore row; it stays gone after relaunch
+- [ ] Scan after a restore lands in RViz consistent with a scan from the original session

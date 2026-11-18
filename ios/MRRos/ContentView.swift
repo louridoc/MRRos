@@ -114,6 +114,38 @@ struct PlacementBar: View {
                 .pickerStyle(.segmented)
             }
 
+            if let saved = scene.savedAlignment, !scene.isPlaced {
+                HStack(spacing: 12) {
+                    Button {
+                        scene.request = .restoreSaved
+                    } label: {
+                        if scene.isRestoring {
+                            Label("Relocalizing…", systemImage: "location.viewfinder")
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Label(
+                                "Restore saved · \(saved.robotName ?? "robot") · "
+                                    + saved.savedAt.formatted(date: .abbreviated, time: .shortened),
+                                systemImage: "clock.arrow.circlepath"
+                            )
+                            .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(session.urdfRobot == nil || scene.isRestoring || scene.isBuilding)
+
+                    Button(role: .destructive) {
+                        scene.request = .forgetSaved
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(scene.isRestoring)
+                    .accessibilityLabel("Forget saved alignment")
+                }
+                .font(.caption)
+            }
+
             HStack(spacing: 12) {
                 Button {
                     scene.request = .place

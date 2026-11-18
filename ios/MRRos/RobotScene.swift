@@ -1,3 +1,4 @@
+import AlignmentKit
 import Foundation
 import Observation
 
@@ -9,6 +10,10 @@ final class RobotScene {
     enum Request: Equatable {
         case place
         case remove
+        /// Re-run the AR session from the saved `ARWorldMap` and re-place the robot once ARKit
+        /// relocalizes (M4b).
+        case restoreSaved
+        case forgetSaved
     }
 
     /// Set by the UI; consumed (reset to nil) by the AR coordinator.
@@ -38,4 +43,8 @@ final class RobotScene {
     var status = "Connect and receive a robot description, then place it."
     var placeholders: [String] = []
     var placedRobotName: String?
+    /// The saved alignment slot, if any — set by the coordinator from `AlignmentStore`.
+    var savedAlignment: SavedAlignmentInfo?
+    /// True between `.restoreSaved` and ARKit relocalizing (or the user placing manually instead).
+    var isRestoring = false
 }

@@ -19,8 +19,9 @@ struct ARContainerView: UIViewRepresentable {
     let scene: RobotScene
     let scanScene: ScanScene
 
-    func makeUIView(context: Context) -> ARView {
-        let view = ARView(frame: .zero)
+    /// Shared by first launch and by restoring a saved alignment, so a restored session is
+    /// configured identically apart from `initialWorldMap`.
+    static func makeConfiguration() -> ARWorldTrackingConfiguration {
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal, .vertical]
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
@@ -29,9 +30,14 @@ struct ARContainerView: UIViewRepresentable {
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             config.frameSemantics.insert(.sceneDepth)
         }
+        return config
+    }
+
+    func makeUIView(context: Context) -> ARView {
+        let view = ARView(frame: .zero)
         view.environment.sceneUnderstanding.options = [.occlusion]
         view.debugOptions = [.showWorldOrigin]
-        view.session.run(config)
+        view.session.run(Self.makeConfiguration())
         context.coordinator.attach(view)
 
         // Alignment gizmo: a single plain pan drag, whose horizontal screen delta moves the
@@ -86,6 +92,16 @@ struct ARContainerView: UIViewRepresentable {
         private var alignment: AlignmentTransform?
         private var wasAligning = false
         private var highlightedAxis: RobotScene.AlignAxis?
+        /// `nil` only if Application Support is unavailable — saving/restoring then just reports so.
+        private let alignmentStore = try? AlignmentStore.standard()
+        /// Set by `restoreSaved`; cleared once ARKit relocalizes and the robot is rebuilt. Frames
+        /// timestamped before `restoreStartedAt` belong to the pre-restore session (tracking
+        /// `.normal`, possibly still holding an old base_link anchor) and must be ignored.
+        private var pendingRestore = false
+        private var restoreStartedAt: TimeInterval = 0
+        /// Set once the base_link anchor has been added; the map is captured on the frame where
+        /// that anchor first appears (an added anchor isn't in the session until a later frame).
+        private var pendingSave: (info: SavedAlignmentInfo, anchorID: UUID)?
         private var robot: RobotEntity?
         private var mapper: JointStateMapper?
         private var smoother = JointSmoother(tau: 0.06)
@@ -120,6 +136,7 @@ struct ARContainerView: UIViewRepresentable {
 
         func attach(_ view: ARView) {
             arView = view
+            scene.savedAlignment = alignmentStore?.info()
             updateSubscription = view.scene.subscribe(to: SceneEvents.Update.self) { [weak self] event in
                 self?.tick(dt: event.deltaTime)
             }
@@ -131,6 +148,8 @@ struct ARContainerView: UIViewRepresentable {
             switch request {
             case .place: place()
             case .remove: remove()
+            case .restoreSaved: restoreSaved()
+            case .forgetSaved: forgetSaved()
             }
         }
 
@@ -149,13 +168,19 @@ struct ARContainerView: UIViewRepresentable {
                 scene.status = "Point the center of the screen at the floor and try again."
                 return
             }
+            build(urdf, at: AlignmentTransform.from(worldTransform: hit.worldTransform), restored: false)
+        }
+
+        /// Builds the robot with `base_link` at `seeded` — from a fresh floor raycast, or from the
+        /// saved anchor after relocalizing.
+        private func build(_ urdf: URDFRobot, at seeded: AlignmentTransform, restored: Bool) {
             remove()
             scene.isBuilding = true
             scene.status = "Loading \(urdf.name)…"
             buildTask = Task { [weak self] in
                 guard let self else { return }
                 let entity = await RobotEntity(robot: urdf, meshes: meshes)
-                guard !Task.isCancelled, let arView = self.arView else { return }
+                guard !Task.isCancelled, let arView else { return }
 
                 let anchor = AnchorEntity(world: matrix_identity_float4x4)
                 let root = Entity()
@@ -164,8 +189,6 @@ struct ARContainerView: UIViewRepresentable {
                 root.addChild(gizmo.root)
                 anchor.addChild(root)
                 arView.scene.addAnchor(anchor)
-
-                let seeded = AlignmentTransform.from(worldTransform: hit.worldTransform)
                 root.transform = Transform(matrix: seeded.transform)
 
                 self.anchor = anchor
@@ -184,9 +207,10 @@ struct ARContainerView: UIViewRepresentable {
                 scene.isPlaced = true
                 scene.placedRobotName = urdf.name
                 scene.placeholders = entity.placeholders
+                let verb = restored ? "restored — check it overlays the real robot" : "placed"
                 scene.status = entity.placeholders.isEmpty
-                    ? "\(urdf.name) placed — \(entity.linkEntities.count) links"
-                    : "\(urdf.name) placed; \(entity.placeholders.count) mesh(es) missing → placeholders"
+                    ? "\(urdf.name) \(verb)"
+                    : "\(urdf.name) \(verb); \(entity.placeholders.count) mesh(es) missing → placeholders"
                 log
                     .info(
                         "placed \(urdf.name, privacy: .public) with \(entity.placeholders.count) placeholders"
@@ -211,6 +235,150 @@ struct ARContainerView: UIViewRepresentable {
             scene.isAligning = false
             scene.placedRobotName = nil
             scene.placeholders = []
+            // Removing (or placing by hand, which removes first) abandons a restore that hasn't
+            // relocalized yet and any save still waiting for its anchor.
+            pendingRestore = false
+            scene.isRestoring = false
+            pendingSave = nil
+            // Leave align mode here rather than via syncAligningState, so removing mid-align
+            // isn't mistaken for "Done" (which saves).
+            if wasAligning {
+                wasAligning = false
+                arView?.environment.sceneUnderstanding.options = [.occlusion]
+            }
+        }
+
+        // MARK: Save / restore alignment (M4b)
+
+        /// Drops a `base_link` ARAnchor at the current alignment; `tick` captures the world map
+        /// once it's in the session. Only when ARKit reports the map as mapped/extending —
+        /// earlier maps relocalize poorly or not at all.
+        private func saveAlignment() {
+            guard let arView, let alignment, alignmentStore != nil,
+                  let frame = arView.session.currentFrame
+            else { return }
+            guard frame.worldMappingStatus == .mapped || frame.worldMappingStatus == .extending else {
+                scene.status = "Aligned, but not saved: ARKit hasn't mapped enough of the room yet. "
+                    + "Move around the robot, then Align → Done again."
+                return
+            }
+            for old in frame.anchors where old.name == AlignmentStore.anchorName {
+                arView.session.remove(anchor: old)
+            }
+            // Tracked by identifier, not name: frames from before this call still contain the
+            // anchor being replaced, which must not satisfy the capture check.
+            let anchor = ARAnchor(name: AlignmentStore.anchorName, transform: alignment.transform)
+            arView.session.add(anchor: anchor)
+            pendingSave = (SavedAlignmentInfo(robotName: scene.placedRobotName, savedAt: Date()), anchor.identifier)
+            scene.status = "Saving alignment…"
+        }
+
+        private func capturePendingSave(_ frame: ARFrame) {
+            guard let (info, anchorID) = pendingSave, let arView, let store = alignmentStore,
+                  frame.anchors.contains(where: { $0.identifier == anchorID })
+            else { return }
+            pendingSave = nil
+            // @Sendable: ARKit calls this off the main actor; archiving/writing happens there and
+            // only the outcome hops back.
+            arView.session.getCurrentWorldMap { @Sendable [weak self] map, error in
+                let outcome: String?
+                do {
+                    guard let map
+                    else { throw error ?? AlignmentStoreError.corrupt("ARKit returned no world map") }
+                    // Exactly the anchor just placed — not a stale one, not two of them.
+                    let robotAnchors = map.anchors.filter { $0.name == AlignmentStore.anchorName }
+                    guard robotAnchors.count == 1, robotAnchors[0].identifier == anchorID else {
+                        throw AlignmentStoreError.corrupt("world map was captured without the current robot anchor")
+                    }
+                    let data = try NSKeyedArchiver.archivedData(
+                        withRootObject: map,
+                        requiringSecureCoding: true
+                    )
+                    try store.save(worldMap: data, info: info)
+                    outcome = nil
+                } catch {
+                    outcome = error.localizedDescription
+                }
+                Task { @MainActor in self?.saveFinished(info: info, error: outcome) }
+            }
+        }
+
+        private func saveFinished(info: SavedAlignmentInfo, error: String?) {
+            if let error {
+                scene.status = "Couldn't save alignment: \(error)"
+            } else {
+                scene.savedAlignment = info
+                scene.status = "Alignment saved — restore it next time with \"Restore saved\"."
+            }
+        }
+
+        /// Re-runs the session from the saved map; `tick` rebuilds the robot at the saved anchor
+        /// once tracking is back to `.normal` (ARKit holds `.limited(.relocalizing)` until it has
+        /// matched the map). Clears the scan: points captured before relocalization would be in
+        /// an unrelated frame.
+        private func restoreSaved() {
+            guard let arView, let store = alignmentStore else { return }
+            guard let urdf = session.urdfRobot else {
+                scene.status = "Connect first — the robot description is needed to rebuild it."
+                return
+            }
+            let map: ARWorldMap
+            let info: SavedAlignmentInfo
+            do {
+                guard let saved = try store.load() else {
+                    scene.savedAlignment = nil
+                    return
+                }
+                guard let unarchived = try NSKeyedUnarchiver.unarchivedObject(
+                          ofClass: ARWorldMap.self,
+                          from: saved.worldMap
+                      ),
+                      unarchived.anchors.contains(where: { $0.name == AlignmentStore.anchorName })
+                else {
+                    scene.status = "Saved alignment is unusable (no robot anchor in it) — align and save again."
+                    return
+                }
+                map = unarchived
+                info = saved.info
+            } catch {
+                scene.status = "Couldn't read saved alignment: \(error.localizedDescription)"
+                return
+            }
+
+            remove()
+            clearScan()
+            let config = ARContainerView.makeConfiguration()
+            config.initialWorldMap = map
+            arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+            restoreStartedAt = ProcessInfo.processInfo.systemUptime // same clock as ARFrame.timestamp
+            pendingRestore = true
+            scene.isRestoring = true
+            var status = "Relocalizing — point the phone at the area where you aligned the robot."
+            if let saved = info.robotName, saved != urdf.name {
+                status += " (Saved for \(saved), connected robot is \(urdf.name).)"
+            }
+            scene.status = status
+        }
+
+        private func completePendingRestore(_ frame: ARFrame) {
+            guard frame.timestamp > restoreStartedAt,
+                  case .normal = frame.camera.trackingState,
+                  let anchor = frame.anchors.first(where: { $0.name == AlignmentStore.anchorName }),
+                  let urdf = session.urdfRobot
+            else { return }
+            pendingRestore = false
+            scene.isRestoring = false
+            build(urdf, at: AlignmentTransform.from(worldTransform: anchor.transform), restored: true)
+        }
+
+        private func forgetSaved() {
+            do {
+                try alignmentStore?.clear()
+                scene.savedAlignment = nil
+                scene.status = "Saved alignment forgotten."
+            } catch {
+                scene.status = "Couldn't forget saved alignment: \(error.localizedDescription)"
+            }
         }
 
         // MARK: Alignment gizmo
@@ -220,7 +388,11 @@ struct ARContainerView: UIViewRepresentable {
         /// switching axes doesn't redo the mode toggles.
         func syncAligningState() {
             if scene.isAligning != wasAligning {
+                let finishedAligning = wasAligning && !scene.isAligning
                 wasAligning = scene.isAligning
+                if finishedAligning {
+                    saveAlignment()
+                }
                 gizmo?.root.isEnabled = scene.isAligning
                 // Translucent robot so the triad at the base reads through it. Occlusion off while
                 // aligning: the triad sits exactly where the REAL robot's base is, so the real
@@ -256,7 +428,8 @@ struct ARContainerView: UIViewRepresentable {
                 // the floor axes, up/down for Z (screen y grows downward, hence the minus).
                 let fallbackPoints = scene.alignAxis == .z ? -Float(t.y) : Float(t.x)
                 let m = Self.metres(
-                    dragging: t, alongBaseLinkAxis: axis, fallbackPoints: fallbackPoints, of: alignment, in: arView
+                    dragging: t, alongBaseLinkAxis: axis, fallbackPoints: fallbackPoints, of: alignment,
+                    in: arView
                 )
                 self.alignment = alignment.translatedInBaseLink(by: axis * m)
             case .yaw:
@@ -418,6 +591,14 @@ struct ARContainerView: UIViewRepresentable {
         // MARK: Per-frame
 
         private func tick(dt: TimeInterval) {
+            if pendingRestore || pendingSave != nil, let frame = arView?.session.currentFrame {
+                if pendingRestore {
+                    completePendingRestore(frame)
+                }
+                if pendingSave != nil {
+                    capturePendingSave(frame)
+                }
+            }
             guard let robot, var mapper else { return }
             if let js = session.jointState, js.header.stamp != lastStamp {
                 lastStamp = js.header.stamp
