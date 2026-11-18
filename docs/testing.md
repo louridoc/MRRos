@@ -277,9 +277,13 @@ Sixth pass (2026-11-17, user request): move relative to `base_link` with a visib
 - While aligning: robot at 45% opacity, selected arrow full / others 30%, and scene occlusion
   off — the triad sits exactly at the real robot's base, so its LiDAR mesh would hide it.
 - Cone tip orientation verified on the Mac (apex at +Y, centred) rather than on device.
+- Device-confirmed by the user ("Perfect!"). Then added `Z` (vertical) translation on request:
+  same drag-along-the-arrow mapping on the blue arrow; when looking straight down (Z
+  foreshortened) the fallback is vertical drag rather than sideways. Registration already uses
+  the full position, so raising the base raises the cloud's `base_link` origin with it.
 
 Device drill, not yet (re-)done:
-- [ ] Virtual robot overlays the real one using the X/Y/Rotate Z axis-select drag
+- [ ] Virtual robot overlays the real one using the X/Y/Z/Rotate Z axis-select drag
 - [ ] A cloud of a box placed at a measured offset appears at that offset in RViz (quantitative
       check — validates the gizmo's resulting transform and the registration path together)
 - [ ] Gesture feel on a real phone (are the 1/1000 m/point and 1/100 rad/point scale factors

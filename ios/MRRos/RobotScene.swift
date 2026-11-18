@@ -21,10 +21,10 @@ final class RobotScene {
     var isAligning = false
 
     /// Degrees of freedom in `base_link` (ROS convention, matching the red/green/blue triad
-    /// drawn at the base): translate along base X or Y, or rotate about base Z (up). Base Z
-    /// translation is deliberately absent — the base sits on the floor.
+    /// drawn at the base): translate along base X, Y or Z (up/down — e.g. a robot on a pedestal
+    /// or a floor plane ARKit estimated slightly off), or rotate about base Z.
     enum AlignAxis: String, CaseIterable, Identifiable {
-        case x = "X", y = "Y", yaw = "Rotate Z"
+        case x = "X", y = "Y", z = "Z", yaw = "Rotate Z"
         var id: String {
             rawValue
         }

@@ -67,6 +67,15 @@ struct AlignmentTransformTests {
         #expect(abs(a.translatedInBaseLink(by: SIMD3(0, -0.4, 0)).position.y - 0.12) < 1e-6)
     }
 
+    @Test func translatingAlongBaseZChangesOnlyHeightByExactlyTheDelta() {
+        for yaw: Float in [0, 0.7, -2.1] {
+            let a = AlignmentTransform(position: SIMD3(0.3, 0.12, -1), yaw: yaw)
+            let moved = a.translatedInBaseLink(by: SIMD3(0, 0, 0.25))
+            #expect(close(moved.position, SIMD3(0.3, 0.37, -1)))
+            #expect(moved.yaw == yaw)
+        }
+    }
+
     /// The triad the user sees, the axis they drag along, and the frame the uploaded cloud is in
     /// must all be the same `base_link`: a point placed `v` along the drawn axes from the base
     /// must register (via the exact path `CloudRegistration` uses) as `v`.

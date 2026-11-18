@@ -32,7 +32,7 @@ final class BaseLinkTriad {
         let active = switch axis {
         case .x: 0
         case .y: 1
-        case .yaw: 2
+        case .z, .yaw: 2
         }
         for (i, arrow) in arrows.enumerated() {
             arrow.components.set(OpacityComponent(opacity: i == active ? 1 : 0.3))

@@ -234,7 +234,7 @@ struct ARContainerView: UIViewRepresentable {
             }
         }
 
-        /// Axis-select-then-drag in `base_link` axes. For X/Y the drag is measured ALONG the
+        /// Axis-select-then-drag in `base_link` axes. For X/Y/Z the drag is measured ALONG the
         /// selected arrow as it appears on screen, scaled so the base follows the finger; yaw
         /// uses plain horizontal drag. No raycasting — see the M4 findings in docs/testing.md
         /// for why touch-point floor raycasts were abandoned.
@@ -246,12 +246,19 @@ struct ARContainerView: UIViewRepresentable {
             recognizer.setTranslation(.zero, in: arView) // consume it — a delta, not a total
 
             switch scene.alignAxis {
-            case .x:
-                let m = Self.metres(dragging: t, alongBaseLinkAxis: SIMD3(1, 0, 0), of: alignment, in: arView)
-                self.alignment = alignment.translatedInBaseLink(by: SIMD3(m, 0, 0))
-            case .y:
-                let m = Self.metres(dragging: t, alongBaseLinkAxis: SIMD3(0, 1, 0), of: alignment, in: arView)
-                self.alignment = alignment.translatedInBaseLink(by: SIMD3(0, m, 0))
+            case .x, .y, .z:
+                let axis: SIMD3<Float> = switch scene.alignAxis {
+                case .x: SIMD3(1, 0, 0)
+                case .y: SIMD3(0, 1, 0)
+                default: SIMD3(0, 0, 1)
+                }
+                // Fallback drag direction when the axis is foreshortened on screen: sideways for
+                // the floor axes, up/down for Z (screen y grows downward, hence the minus).
+                let fallbackPoints = scene.alignAxis == .z ? -Float(t.y) : Float(t.x)
+                let m = Self.metres(
+                    dragging: t, alongBaseLinkAxis: axis, fallbackPoints: fallbackPoints, of: alignment, in: arView
+                )
+                self.alignment = alignment.translatedInBaseLink(by: axis * m)
             case .yaw:
                 self.alignment = alignment.rotated(byYaw: Float(t.x) * Self.panRadiansPerPoint)
             }
@@ -261,11 +268,12 @@ struct ARContainerView: UIViewRepresentable {
         /// How far (metres) a screen drag `t` moves along a `base_link` axis: project a short
         /// segment of that axis to screen, take the drag's component along it, and divide by the
         /// segment's on-screen pixels-per-metre — so the base tracks the finger along the arrow
-        /// regardless of distance or viewing angle. Falls back to a fixed horizontal-drag scale
-        /// when the axis is foreshortened (pointing at the camera) or the base is off-screen.
+        /// regardless of distance or viewing angle. Falls back to `fallbackPoints` at a fixed
+        /// scale when the axis is foreshortened (pointing at the camera) or the base is off-screen.
         private static func metres(
             dragging t: CGPoint,
             alongBaseLinkAxis axis: SIMD3<Float>,
+            fallbackPoints: Float,
             of alignment: AlignmentTransform,
             in arView: ARView
         ) -> Float {
@@ -279,7 +287,7 @@ struct ARContainerView: UIViewRepresentable {
                     return along * segment / pixels
                 }
             }
-            return Float(t.x) * panMetersPerPoint
+            return fallbackPoints * panMetersPerPoint
         }
 
         // Fallback/yaw scales, same order of magnitude as the reference app's block drag:
