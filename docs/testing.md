@@ -284,7 +284,7 @@ Sixth pass (2026-11-17, user request): move relative to `base_link` with a visib
 
 Device drill, not yet (re-)done:
 - [x] Virtual robot overlays the real one using the X/Y/Z/Rotate Z axis-select drag (2026-11-17)
-- [ ] A cloud of a box placed at a measured offset appears at that offset in RViz (quantitative
+- [~] Waived by the user (2026-11-17): room scan judged "close enough" in RViz; not measured. A cloud of a box placed at a measured offset appears at that offset in RViz (quantitative
       check — validates the gizmo's resulting transform and the registration path together)
 - [x] Gesture feel on a real phone — "works great" (2026-11-17)
 
@@ -312,12 +312,15 @@ Races caught in self-review before any device test:
   unless it holds exactly that one robot anchor.
 
 Device drill:
-- [ ] Align → Done saves ("Alignment saved"); if it says "hasn't mapped enough", walk around the
+- [x] Align → Done saves ("Alignment saved"); if it says "hasn't mapped enough", walk around the
       robot and Done again
-- [ ] Kill the app, relaunch, connect → "Restore saved · <robot> · <time>" appears
-- [ ] Restore → "Relocalizing…" → robot reappears overlaying the real one (status says
+- [x] Kill the app, relaunch, connect → "Restore saved · <robot> · <time>" appears
+- [x] Restore → "Relocalizing…" → robot reappears overlaying the real one (status says
       "restored — check it overlays the real robot")
 - [ ] Restore while pointing somewhere unrelated stays "Relocalizing…"; tapping Place robot
       abandons the restore cleanly
 - [ ] Forget (ⓧ) removes the restore row; it stays gone after relaunch
 - [ ] Scan after a restore lands in RViz consistent with a scan from the original session
+
+Core save → relaunch → restore flow device-confirmed ("Works!", 2026-11-17); the edge cases
+above (unrelated-area restore, Forget across relaunch, post-restore scan) not explicitly checked.
