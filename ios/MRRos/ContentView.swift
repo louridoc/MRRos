@@ -95,11 +95,57 @@ struct PlacementBar: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Text(scene.status)
+            Text(
+                scene.isAligning
+                    ? "Pick X (red), Y (green) or Z (blue) and drag along that arrow, or Rotate Z and drag sideways. Done when it overlays the real robot."
+                    : scene.status
+            )
+            .font(.caption)
+            .lineLimit(2)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.secondary)
+
+            if scene.isAligning {
+                Picker("Axis", selection: $scene.alignAxis) {
+                    ForEach(RobotScene.AlignAxis.allCases) { axis in
+                        Text(axis.rawValue).tag(axis)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            if let saved = scene.savedAlignment, !scene.isPlaced {
+                HStack(spacing: 12) {
+                    Button {
+                        scene.request = .restoreSaved
+                    } label: {
+                        if scene.isRestoring {
+                            Label("Relocalizing…", systemImage: "location.viewfinder")
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Label(
+                                "Restore saved · \(saved.robotName ?? "robot") · "
+                                    + saved.savedAt.formatted(date: .abbreviated, time: .shortened),
+                                systemImage: "clock.arrow.circlepath"
+                            )
+                            .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(session.urdfRobot == nil || scene.isRestoring || scene.isBuilding)
+
+                    Button(role: .destructive) {
+                        scene.request = .forgetSaved
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(scene.isRestoring)
+                    .accessibilityLabel("Forget saved alignment")
+                }
                 .font(.caption)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+            }
+
             HStack(spacing: 12) {
                 Button {
                     scene.request = .place
@@ -110,10 +156,18 @@ struct PlacementBar: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(session.urdfRobot == nil || scene.isBuilding)
 
+                Button {
+                    scene.isAligning.toggle()
+                } label: {
+                    Label(scene.isAligning ? "Done" : "Align", systemImage: "move.3d")
+                }
+                .buttonStyle(.bordered)
+                .disabled(!scene.isPlaced)
+
                 Button(role: .destructive) {
                     scene.request = .remove
                 } label: {
-                    Label("Remove", systemImage: "trash")
+                    Image(systemName: "trash")
                 }
                 .buttonStyle(.bordered)
                 .disabled(!scene.isPlaced)

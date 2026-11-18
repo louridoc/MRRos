@@ -9,12 +9,14 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../TFKit"),
+        .package(path: "../LiDARScan"),
     ],
     targets: [
         .target(
             name: "AlignmentKit",
             dependencies: [
                 .product(name: "TFKit", package: "TFKit"),
+                .product(name: "LiDARScan", package: "LiDARScan"),
             ],
             swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
         ),

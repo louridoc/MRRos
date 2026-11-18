@@ -155,3 +155,172 @@ Findings log:
   window and isn't valid ASCII. Caught by self-review before running any tests, not by a test
   failure; fixed by searching for the literal `end_header\n` byte marker first. Applied the same
   fix proactively to the Python decoder (`ply.py`) and locked it in with a named regression test.
+
+## M4 — Alignment (in progress)
+Scope decided with the user: initially a free drag-to-translate + two-finger-rotate gizmo (not
+nudge buttons) — revised after device testing to axis-select-then-drag (see "fourth attempt"
+below), on the user's advice from a prior AR app where free dragging had the same problems.
+`ARWorldMap` save/restore deferred to a follow-up (M4b) after this pass is device-verified.
+
+Automated: `tools/ios-test.sh AlignmentKit` — `AlignmentTransform` property tests (identity is a
+no-op, the anchor's own position always maps to the ROS origin regardless of yaw, yaw rotates
+about the vertical axis, translate/rotate deltas compose correctly, `pointInBaseLink` round-trips
+through the forward transform, `.from(worldTransform:)` extracts position exactly and is
+self-consistent with `.transform`) and `CloudRegistration` tests (matches `FrameConventions`
+per-point, preserves confidence/color/count, identity alignment equals plain axis rotation,
+registering places the alignment's own anchor at the ROS origin, yaw=0 case matches simple
+subtraction — i.e. M3's old stopgap is a special case of the new general path).
+
+Built this pass:
+- `AlignmentKit.AlignmentTransform` — position + yaw (not full 6-DOF: robots are bolted to a
+  level floor and the initial placement is already a gravity-aligned horizontal-plane raycast,
+  so pitch/roll aren't a real DOF worth exposing).
+- `AlignmentKit.CloudRegistration` — moved the point-cloud transform logic out of the app
+  target into here (it's pure math, no ARKit dependency) so it's actually unit-testable, per
+  CONTRIBUTING.md's "no logic that belongs in a package" rule. `captureScan` now stores raw AR-world
+  points; both the ROS-axis rotation and the alignment registration happen together at upload
+  time, recomputed from whatever the CURRENT alignment is — re-aligning doesn't require
+  re-scanning.
+- Gizmo gestures on `ARContainerView` (superseded — see "fourth attempt" below for the current
+  design): originally single-finger pan re-raycasting the floor under the touch point to
+  translate, two-finger rotation for yaw, and a translucent "ghost" render while aligning.
+
+Device drill, first attempt (2026-11-17): three real problems, all fixed same session, not yet
+re-verified on device:
+- **No visible gizmo** — there was nothing on screen indicating align mode or offering something
+  to look at besides the robot itself. Added an actual gizmo entity (translucent cyan disc +
+  red heading arrow, `UnlitMaterial` so it reads regardless of scene lighting), child of the
+  placement anchor so it tracks position/yaw automatically, shown only while aligning.
+- **Robot too transparent** — 40% opacity made it hard to actually judge overlap against the
+  real robot. Raised to 75%; the gizmo (not heavy ghosting) is now what signals "you're in align
+  mode."
+- **Robot drops below the floor on touch** — the real bug. `handlePan` re-raycasted
+  `.estimatedPlane` at the touch point on every move; ARKit's plane *estimation* (not just
+  detection) can return a hit on a different, spurious, or lower-than-true-floor plane,
+  especially right where the user is touching to "grab" the robot. Replaced with deterministic
+  ray/plane math: intersect the camera ray through the touch point with the horizontal plane at
+  the robot's own current height (`ARView.ray(through:)`, no ARKit plane detection involved at
+  all) — the Y coordinate can no longer drift from a bad plane hit.
+
+Device drill, second attempt (2026-11-17): dragging was "awful" — reported symptoms were
+"too sensitive / overshoots" and "snaps to the wrong place" (rotation untested). Root cause:
+`handlePan` set the robot's position to the *absolute* ray/floor-plane projection of the touch
+point on every `.changed` event, rather than moving it by how far the touch had moved. That
+snaps the robot to wherever your finger currently is (not where you started touching — "wrong
+place"), and at shallow viewing angles a small finger movement maps to a large change in that
+projected point ("overshoots"). Fixed by switching to relative-delta dragging: `.began` records
+the touch's floor-projection and the alignment's starting position; `.changed` moves by the
+difference between the current and starting projections, added to the starting position — the
+standard pattern for dragging an object across a plane in AR, used by essentially every
+placement app.
+
+Device drill, third attempt (2026-11-17): user reported the relative-delta fix made no
+difference — robot still "goes below the floor" the moment it's touched. The pan math is
+provably unable to move Y at all (the ray/plane intersection is solved so both the start and
+current touch projections land exactly on the robot's current height — their difference has a
+y-component of exactly 0 by construction), so this is very unlikely to be an actual position
+bug. Best diagnosis without being able to see the device: the OTHER change bundled into the
+previous fix — ghosting the robot via `OpacityComponent` while aligning — is the real culprit.
+Alpha-blended geometry typically doesn't write to the depth buffer the way opaque geometry does,
+so with `sceneUnderstanding.options = [.occlusion]` still enabled, the real-world LiDAR
+occlusion mesh can clip through/hide a translucent model in ways it never could against an
+opaque one, which would visually read as "sinking into the floor" with no actual transform
+change. Fix: dropped the opacity ghost entirely (robot stays fully opaque throughout; the gizmo
+disc/arrow is what signals align mode now) and disable scene occlusion while aligning so the
+real-world mesh can't compete with the model you're actively moving.
+
+Device drill, fourth attempt (2026-11-17): occlusion fix was an improvement but the user judged
+the whole free-drag interaction a bad idea on its own merits (also reported the robot looked
+smaller, cause not diagnosed — moot once the mechanism below was replaced wholesale). Per the
+user's own prior AR app (`~/xcode_ws/MCRL-AR-Swift-App`), which hit the same free-drag
+unreliability and solved it with axis-select-then-drag, ported that pattern directly:
+- `RobotScene.AlignAxis` (`.x`, `.z`, `.yaw`) + a segmented control, shown only while aligning.
+- `AlignmentTransform.translatedLocally(byX:byZ:)` — moves along the alignment's OWN local axes
+  (rotated by current yaw), matching the reference app's `localTranslate`.
+- A single `UIPanGestureRecognizer`; `handlePan` reads only `translation(in:).x` (screen points,
+  not any 3D raycast or ray/plane intersection — no ARKit geometry query of any kind) and routes
+  it to whichever axis is selected, scaled by a constant (`1/1000` m/point for translation,
+  `1/100` rad/point for yaw — taken from the reference app's already-tuned feel) and consumes
+  the delta via `setTranslation(.zero, in:)` each event, mirroring the reference app's
+  `sender.setTranslation(CGPoint.zero, ...)`. No floor raycasting, no occlusion interaction, no
+  shallow-angle amplification — the entire class of bugs from the first three attempts doesn't
+  apply to this design since no 3D geometry query is involved in the drag at all.
+Dropped the two-finger rotation gesture and the free-translate pan entirely.
+
+Device drill, fifth attempt (2026-11-17): the axis-select redesign made NO difference — robot
+still snapped below the floor the instant a drag started, even though the new pan math only
+ever touches X/Z/yaw and provably can't move Y. That ruled out the pan math itself across two
+completely different implementations, which pointed at something underneath both of them:
+every attempt so far mutated `AnchorEntity.transform` directly to move the robot.
+`AnchorEntity` represents a point ARKit tracks, and there was never a confirmed guarantee that
+manually overwriting its `.transform` doesn't get fought or partially overridden by RealityKit's
+own anchor bookkeeping — which would explain a symptom that survived three independent fixes to
+the gesture-handling code above it. Restructured so `anchor` is created once at the identity
+transform and never touched again; a new plain child `Entity` (`alignmentRoot`) holds the robot
+and gizmo, and its LOCAL transform (== world transform, since `anchor` is identity) is what
+`alignment.transform` now drives. A plain `Entity`'s transform has no anchor-tracking behavior
+to fight with. **Confirmed on device: "much better"** — the floor-sinking was the
+`AnchorEntity` mutation all along; the occlusion/ghosting theory (third attempt) was a red herring.
+
+Sixth pass (2026-11-17, user request): move relative to `base_link` with a visible triad.
+- The previous X/Z buttons used AR-convention local axes; in `base_link` Z is up and the
+  horizontal axes are X and Y, so they'd have contradicted a ROS triad. Axes are now
+  `X` / `Y` / `Rotate Z`, computed in `AlignmentKit` (`worldVector(fromBaseLink:)`,
+  `translatedInBaseLink(by:)`) — no axis swap in the app target.
+- `BaseLinkTriad` (red X, green Y, blue Z, 0.4 m) is built in ROS coordinates under an entity
+  carrying `FrameConventions.rosToAR` — the same rotation `RobotEntity` uses. Property test
+  `drawnBaseLinkAxesMatchTheRegistrationFrame` proves a point `v` along the drawn axes registers
+  as `v` through `CloudRegistration`'s path, i.e. triad = robot axes = uploaded cloud frame.
+- X/Y drag is measured along the selected arrow's on-screen projection and scaled by its
+  pixels-per-metre, so the base follows the finger along the arrow; falls back to horizontal
+  drag at 1/1000 m/pt when the axis points at the camera. Rotate uses horizontal drag.
+- While aligning: robot at 45% opacity, selected arrow full / others 30%, and scene occlusion
+  off — the triad sits exactly at the real robot's base, so its LiDAR mesh would hide it.
+- Cone tip orientation verified on the Mac (apex at +Y, centred) rather than on device.
+- Device-confirmed by the user ("Perfect!"). Then added `Z` (vertical) translation on request:
+  same drag-along-the-arrow mapping on the blue arrow; when looking straight down (Z
+  foreshortened) the fallback is vertical drag rather than sideways. Registration already uses
+  the full position, so raising the base raises the cloud's `base_link` origin with it.
+
+Device drill, not yet (re-)done:
+- [x] Virtual robot overlays the real one using the X/Y/Z/Rotate Z axis-select drag (2026-11-17)
+- [~] Waived by the user (2026-11-17): room scan judged "close enough" in RViz; not measured. A cloud of a box placed at a measured offset appears at that offset in RViz (quantitative
+      check — validates the gizmo's resulting transform and the registration path together)
+- [x] Gesture feel on a real phone — "works great" (2026-11-17)
+
+## M4b — Save/restore alignment (ARWorldMap)
+Design: on "Done" aligning, an `ARAnchor` named `mrros.base_link` is placed at the aligned pose
+and ARKit's world map (which carries it) is archived to `Application Support/MRRos/alignment`
+with JSON metadata (robot name, time). "Restore saved" re-runs the session with
+`initialWorldMap` and rebuilds the robot at that anchor once tracking is `.normal` again.
+Restoring from the anchor (not a stored pose) lets ARKit's own map refinement carry over.
+Choices: restore is a button, not automatic at launch (relocalizing resets the session and just
+waits if you're elsewhere); save is automatic on Done but only when `worldMappingStatus` is
+`.mapped`/`.extending`; one slot. A restore clears the in-progress scan.
+
+Automated: `tools/ios-test.sh AlignmentKit` — `AlignmentStore` (platform-neutral; the map is
+opaque `Data` there): empty → nothing to restore, save/load round-trip, overwrite, clear is
+idempotent, metadata without a map → `.corrupt`, unreadable metadata → treated as nothing saved.
+The `ARWorldMap` archive/relocalization itself is device-only (no simulator/Mac equivalent).
+
+Races caught in self-review before any device test:
+- For a moment after `session.run(..., .resetTracking)` `currentFrame` can still be from the
+  OLD session — tracking `.normal`, possibly holding an earlier base_link anchor — which would
+  have "restored" instantly in the wrong frame. Frames older than the restore are now ignored.
+- Replacing the anchor before a save is a remove + add, but frames from before that call still
+  contain the old anchor. The save now tracks the new anchor by identifier and rejects a map
+  unless it holds exactly that one robot anchor.
+
+Device drill:
+- [x] Align → Done saves ("Alignment saved"); if it says "hasn't mapped enough", walk around the
+      robot and Done again
+- [x] Kill the app, relaunch, connect → "Restore saved · <robot> · <time>" appears
+- [x] Restore → "Relocalizing…" → robot reappears overlaying the real one (status says
+      "restored — check it overlays the real robot")
+- [ ] Restore while pointing somewhere unrelated stays "Relocalizing…"; tapping Place robot
+      abandons the restore cleanly
+- [ ] Forget (ⓧ) removes the restore row; it stays gone after relaunch
+- [ ] Scan after a restore lands in RViz consistent with a scan from the original session
+
+Core save → relaunch → restore flow device-confirmed ("Works!", 2026-11-17); the edge cases
+above (unrelated-area restore, Forget across relaunch, post-restore scan) not explicitly checked.
