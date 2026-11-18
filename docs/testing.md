@@ -107,11 +107,26 @@ Mac-side end-to-end check (no phone), same discipline as M2b:
 - [x] Full app target builds (`tools/ios-build.sh`) with the capture/preview/upload UI
       (`ScanScene`, `ScanSheet`, `ARContainerView.Coordinator.captureScan/clearScan/uploadScan`)
 
-Device drill: **not yet done.** Still open: on-device LiDAR capture (real `ARMeshAnchor` data,
-not just the server/transport path), the "1M-point upload < 5 s on Wi-Fi" timing, and visual
-confirmation that an on-device scan lands correctly in RViz relative to the real room.
+Device drill:
+- [x] Real on-device scan (CRX-30iA dev bringup): app captured and uploaded a real
+      `ARMeshAnchor`-derived cloud (10801 → 48893 points across several captures), `ar_bridge`
+      logged it received and published each one (2026-11-17)
+- [ ] Cloud confirmed visible in RViz relative to the real room — blocked by the `map`-frame bug
+      below, fix not yet re-tested on device
+- [ ] "1M-point upload < 5 s on Wi-Fi" timing — not yet measured
 
 Findings log:
+- 2026-11-17: on-device scan uploaded successfully (`ar_bridge` logged the correct point counts)
+  but never appeared in RViz. Root cause: the app uploads with `frame_id=map` (by design, see
+  `ar_bridge_http.md` — `map` is a placeholder pre-M4 since there's no real alignment yet), but
+  `dev.launch.py` never published a `map` TF frame at all, and `dev.rviz`'s `PointCloud2` display
+  (which *was* correctly configured — a `grep` miss during triage falsely suggested otherwise,
+  due to BSD `grep`'s `\|` not meaning alternation) had no way to transform into Fixed Frame
+  `base_link`. Verified all 7 robots in `robots.py` root their TF tree at `world` with no parent
+  (expanded every xacro and diffed link defs against joint children); fixed by adding a single
+  identity `static_transform_publisher` (`map` → `world`) to `dev.launch.py`, uniform across
+  robots. Verified via `tf2_echo map base_link` resolving to the expected 0.75 m CRX pedestal
+  offset. Not yet re-confirmed on device (next step).
 - 2026-11-17: `PLYCodec.parseHeader` (Swift) originally located `end_header` by decoding
   `data.prefix(4096)` as ASCII — fails whenever a small cloud's binary payload falls inside that
   window and isn't valid ASCII. Caught by self-review before running any tests, not by a test

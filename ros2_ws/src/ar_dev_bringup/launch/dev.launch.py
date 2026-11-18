@@ -69,6 +69,19 @@ def _setup(context, *args, **kwargs):
         launch_arguments={"port": LaunchConfiguration("rosbridge_port")}.items(),
     )
 
+    # `/v0/cloud` uploads use `frame_id=map` (pre-M4: an AR-session-local frame — see
+    # docs/protocols/ar_bridge_http.md) but nothing in this bringup ever published a `map`
+    # frame, so RViz silently had no TF path to render `/mrros/static_cloud` at all. Every
+    # robot in `robots.py` roots its own TF tree at `world` with no parent (verified for all 7),
+    # so an identity `map` → `world` static transform is a safe, uniform placeholder: it never
+    # conflicts with a frame that already has a parent, and M4 replaces it with the real
+    # alignment transform.
+    map_to_world = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        arguments=["--frame-id", "map", "--child-frame-id", "world"],
+    )
+
     rviz = Node(
         package="rviz2",
         executable="rviz2",
@@ -88,7 +101,7 @@ def _setup(context, *args, **kwargs):
         output="screen",
     )
 
-    return [rsp, mock, rosbridge, rviz, ar_bridge]
+    return [rsp, mock, map_to_world, rosbridge, rviz, ar_bridge]
 
 
 def generate_launch_description() -> LaunchDescription:
