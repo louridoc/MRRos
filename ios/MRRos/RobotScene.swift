@@ -15,6 +15,11 @@ final class RobotScene {
     var request: Request?
     var isPlaced = false
     var isBuilding = false
+    /// Toggled directly by the UI (a mode, not a one-shot request): while true, drag/rotate
+    /// gestures on the AR view nudge the placed robot's alignment, and it renders translucent
+    /// so it's visually obvious you're comparing against the camera passthrough, not just
+    /// looking at an opaque model. See M4 in docs/PLAN.md.
+    var isAligning = false
     var status = "Connect and receive a robot description, then place it."
     var placeholders: [String] = []
     var placedRobotName: String?

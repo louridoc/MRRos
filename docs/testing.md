@@ -155,3 +155,42 @@ Findings log:
   window and isn't valid ASCII. Caught by self-review before running any tests, not by a test
   failure; fixed by searching for the literal `end_header\n` byte marker first. Applied the same
   fix proactively to the Python decoder (`ply.py`) and locked it in with a named regression test.
+
+## M4 — Alignment (in progress)
+Scope decided with the user: drag-to-translate + two-finger-rotate gizmo (not nudge buttons);
+`ARWorldMap` save/restore deferred to a follow-up (M4b) after this pass is device-verified.
+
+Automated: `tools/ios-test.sh AlignmentKit` — `AlignmentTransform` property tests (identity is a
+no-op, the anchor's own position always maps to the ROS origin regardless of yaw, yaw rotates
+about the vertical axis, translate/rotate deltas compose correctly, `pointInBaseLink` round-trips
+through the forward transform, `.from(worldTransform:)` extracts position exactly and is
+self-consistent with `.transform`) and `CloudRegistration` tests (matches `FrameConventions`
+per-point, preserves confidence/color/count, identity alignment equals plain axis rotation,
+registering places the alignment's own anchor at the ROS origin, yaw=0 case matches simple
+subtraction — i.e. M3's old stopgap is a special case of the new general path).
+
+Built this pass:
+- `AlignmentKit.AlignmentTransform` — position + yaw (not full 6-DOF: robots are bolted to a
+  level floor and the initial placement is already a gravity-aligned horizontal-plane raycast,
+  so pitch/roll aren't a real DOF worth exposing).
+- `AlignmentKit.CloudRegistration` — moved the point-cloud transform logic out of the app
+  target into here (it's pure math, no ARKit dependency) so it's actually unit-testable, per
+  CONTRIBUTING.md's "no logic that belongs in a package" rule. `captureScan` now stores raw AR-world
+  points; both the ROS-axis rotation and the alignment registration happen together at upload
+  time, recomputed from whatever the CURRENT alignment is — re-aligning doesn't require
+  re-scanning.
+- Gizmo gestures on `ARContainerView`: single-finger pan re-raycasts the floor under the touch
+  point (same raycast `place()` uses) to translate; two-finger rotation adjusts yaw. Both are
+  no-ops unless `RobotScene.isAligning` is on (an explicit "Align" button, not always-live, to
+  avoid accidental nudges during normal viewing).
+- Overlay check view: while aligning, the robot renders at 40% opacity (`OpacityComponent`) so
+  it's visually obvious you're comparing against the camera passthrough, not just looking at an
+  opaque model; reverts to opaque on "Done".
+
+Device drill: **not yet done.** Still open — all three manual checklist items from
+`docs/PLAN.md`'s M4 row:
+- [ ] Virtual robot overlays the real one after dragging/rotating with the gizmo
+- [ ] A cloud of a box placed at a measured offset appears at that offset in RViz (quantitative
+      check — validates the gizmo's resulting transform and the registration path together)
+- [ ] Gesture feel on a real phone (pan precision, rotation sign/direction, whether raycasting
+      the floor on every pan sample feels responsive)

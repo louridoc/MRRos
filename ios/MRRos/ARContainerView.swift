@@ -32,12 +32,28 @@ struct ARContainerView: UIViewRepresentable {
         view.debugOptions = [.showWorldOrigin]
         view.session.run(config)
         context.coordinator.attach(view)
+
+        // Alignment gizmo: single-finger pan re-raycasts the floor under the touch point (same
+        // raycast `place()` uses); two-finger rotation adjusts yaw. Both are no-ops unless
+        // `scene.isAligning` is on — see `handlePan`/`handleRotation` — so they don't interfere
+        // with normal AR viewing.
+        let pan = UIPanGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handlePan)
+        )
+        let rotation = UIRotationGestureRecognizer(
+            target: context.coordinator, action: #selector(Coordinator.handleRotation)
+        )
+        view.addGestureRecognizer(pan)
+        view.addGestureRecognizer(rotation)
+
         return view
     }
 
     func updateUIView(_ uiView: ARView, context: Context) {
         context.coordinator.handleRequest()
         context.coordinator.handleScanRequest()
+        context.coordinator.syncAligningState()
     }
 
     func makeCoordinator() -> Coordinator {
@@ -45,16 +61,19 @@ struct ARContainerView: UIViewRepresentable {
     }
 
     /// Owns the robot entity and drives it from `/joint_states` on every rendered frame.
+    /// `NSObject` because `UIGestureRecognizer` targets need Objective-C dispatch.
     @MainActor
-    final class Coordinator {
+    final class Coordinator: NSObject {
         private let session: ROSSession
         private let scene: RobotScene
         private let scanScene: ScanScene
         private weak var arView: ARView?
         private var anchor: AnchorEntity?
-        /// The AR-world pose the robot was placed at (`hit.worldTransform`), kept around purely
-        /// so a scan upload can register itself against it — see `uploadScan`.
-        private var placementTransform: simd_float4x4?
+        /// Where `base_link` is in AR world space — seeded from the placement raycast, then
+        /// refined live by the gizmo gestures while `scene.isAligning`. Scan uploads register
+        /// against this, recomputed fresh at upload time (see `uploadScan`).
+        private var alignment: AlignmentTransform?
+        private var wasAligning = false
         private var robot: RobotEntity?
         private var mapper: JointStateMapper?
         private var smoother = JointSmoother(tau: 0.06)
@@ -64,12 +83,10 @@ struct ARContainerView: UIViewRepresentable {
         private var uploadTask: Task<Void, Never>?
         private let log = Logger(subsystem: "io.github.louridoc.mrros", category: "ARContainer")
 
-        /// Accumulated across `.capture` requests: ROS axis convention (rotation only, via
-        /// `FrameConventions`) but still relative to the AR session's arbitrary origin — the
-        /// registration against wherever the robot was placed happens at upload time in
-        /// `uploadScan`, not here, so re-placing the robot doesn't require re-scanning.
-        /// Re-voxelized after every capture so repeated taps don't make the cloud grow without
-        /// bound from re-scanning the same surfaces.
+        /// Accumulated across `.capture` requests in raw AR-world coordinates — neither the ROS
+        /// axis rotation nor the robot-alignment registration is applied until upload time (see
+        /// `captureScan`/`uploadScan`). Re-voxelized after every capture so repeated taps don't
+        /// make the cloud grow without bound from re-scanning the same surfaces.
         private var scanCloud = PointCloud.empty
         private let scanVoxelSize: Float = 0.02
 
@@ -86,6 +103,7 @@ struct ARContainerView: UIViewRepresentable {
             self.session = session
             self.scene = scene
             self.scanScene = scanScene
+            super.init()
         }
 
         func attach(_ view: ARView) {
@@ -130,7 +148,7 @@ struct ARContainerView: UIViewRepresentable {
                 anchor.addChild(entity.root)
                 arView.scene.addAnchor(anchor)
                 self.anchor = anchor
-                placementTransform = hit.worldTransform
+                alignment = AlignmentTransform.from(worldTransform: hit.worldTransform)
                 robot = entity
                 mapper = JointStateMapper(robot: urdf)
                 smoother = JointSmoother(
@@ -159,13 +177,49 @@ struct ARContainerView: UIViewRepresentable {
                 arView?.scene.removeAnchor(anchor)
             }
             anchor = nil
-            placementTransform = nil
+            alignment = nil
             robot = nil
             mapper = nil
             scene.isPlaced = false
             scene.isBuilding = false
+            scene.isAligning = false
             scene.placedRobotName = nil
             scene.placeholders = []
+        }
+
+        // MARK: Alignment gizmo
+
+        /// Called every `updateUIView`; reacts to `scene.isAligning` flipping (ghost the robot
+        /// while aligning) rather than a one-shot request, since this is a persistent mode.
+        func syncAligningState() {
+            guard scene.isAligning != wasAligning else { return }
+            wasAligning = scene.isAligning
+            robot?.root.components.set(OpacityComponent(opacity: scene.isAligning ? 0.4 : 1.0))
+        }
+
+        @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
+            guard scene.isAligning, anchor != nil, let arView, recognizer.state == .changed else { return }
+            let point = recognizer.location(in: arView)
+            guard let hit = arView.raycast(from: point, allowing: .estimatedPlane, alignment: .horizontal)
+                .first
+            else { return }
+            let t = hit.worldTransform.columns.3
+            alignment?.position = SIMD3(t.x, t.y, t.z)
+            applyAlignmentToAnchor()
+        }
+
+        @objc func handleRotation(_ recognizer: UIRotationGestureRecognizer) {
+            guard scene.isAligning, anchor != nil, recognizer.state == .changed else { return }
+            // UIKit's rotation gesture reports clockwise-positive in screen space; negate so it
+            // matches AR's right-handed +Y-up yaw convention (counter-clockwise from above).
+            alignment = alignment?.rotated(byYaw: Float(-recognizer.rotation))
+            recognizer.rotation = 0
+            applyAlignmentToAnchor()
+        }
+
+        private func applyAlignmentToAnchor() {
+            guard let anchor, let alignment else { return }
+            anchor.transform = Transform(matrix: alignment.transform)
         }
 
         // MARK: Scanning
@@ -183,7 +237,10 @@ struct ARContainerView: UIViewRepresentable {
         /// Pulls vertices out of every `ARMeshAnchor` currently in the session's fused scene
         /// mesh (LiDAR-backed, already deduplicated by ARKit across overlapping frames — a much
         /// better "static point cloud of the environment" source than raw per-frame depth
-        /// points), converts world space → ROS, and folds them into the running scan.
+        /// points) and folds them into the running scan, in raw AR-world coordinates. Neither
+        /// the ROS axis rotation nor the robot-alignment registration is applied here — both
+        /// happen together at upload time in `uploadScan`, using whatever the CURRENT alignment
+        /// is then, so re-aligning the robot after a capture doesn't require re-scanning.
         private func captureScan() {
             guard let frame = arView?.session.currentFrame else {
                 scanScene.status = "No AR frame yet — point the camera around first."
@@ -195,15 +252,13 @@ struct ARContainerView: UIViewRepresentable {
                 return
             }
 
-            var batch = PointCloud.empty
             var bx: [Float] = [], by: [Float] = [], bz: [Float] = []
             for meshAnchor in meshAnchors {
                 for worldVertex in Self.worldVertices(of: meshAnchor) {
-                    let rosPoint = FrameConventions.toROS(point: worldVertex)
-                    bx.append(rosPoint.x); by.append(rosPoint.y); bz.append(rosPoint.z)
+                    bx.append(worldVertex.x); by.append(worldVertex.y); bz.append(worldVertex.z)
                 }
             }
-            batch = PointCloud(x: bx, y: by, z: bz, confidence: [UInt8](repeating: 2, count: bx.count))
+            let batch = PointCloud(x: bx, y: by, z: bz, confidence: [UInt8](repeating: 2, count: bx.count))
 
             scanCloud.append(batch)
             scanCloud = VoxelFilter.downsample(scanCloud, voxelSize: scanVoxelSize)
@@ -243,21 +298,19 @@ struct ARContainerView: UIViewRepresentable {
                 return
             }
 
-            // Pre-M4 registration: if the robot has been placed, re-express the scan relative
-            // to that placement (translation only — orientation nudging is M4's manual gizmo)
-            // so it lands roughly where the robot sits in RViz, instead of relative to an
-            // arbitrary AR session origin with no relationship to the room. Recomputed from
-            // whatever the CURRENT placement is at upload time, not baked in at capture time,
-            // so re-placing the robot doesn't require re-scanning.
+            // Registration: if the robot has been placed/aligned, re-express every point
+            // relative to that alignment (position AND yaw — full registration, not M3's
+            // translation-only stopgap) before rotating into ROS axis convention, so the cloud
+            // lands in base_link where the gizmo says the robot actually is. Recomputed from
+            // whatever the CURRENT alignment is at upload time, not baked in at capture time,
+            // so re-aligning doesn't require re-scanning.
             let frameId: String
             let toUpload: PointCloud
-            if let placementTransform {
-                let t = placementTransform.columns.3
-                let originROS = FrameConventions.toROS(point: SIMD3(t.x, t.y, t.z))
-                toUpload = Self.subtracting(originROS, from: scanCloud)
+            if let alignment {
+                toUpload = CloudRegistration.registering(scanCloud, against: alignment)
                 frameId = "base_link"
             } else {
-                toUpload = scanCloud
+                toUpload = CloudRegistration.rotatedToROSAxes(scanCloud)
                 frameId = "map"
                 scanScene.status = "No robot placed — uploading unregistered (frame \"map\")."
             }
@@ -282,17 +335,6 @@ struct ARContainerView: UIViewRepresentable {
                 }
                 scanScene.isUploading = false
             }
-        }
-
-        private static func subtracting(_ origin: SIMD3<Float>, from cloud: PointCloud) -> PointCloud {
-            guard !cloud.isEmpty else { return cloud }
-            return PointCloud(
-                x: cloud.x.map { $0 - origin.x },
-                y: cloud.y.map { $0 - origin.y },
-                z: cloud.z.map { $0 - origin.z },
-                confidence: cloud.confidence,
-                color: cloud.color
-            )
         }
 
         // MARK: Per-frame

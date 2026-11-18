@@ -95,7 +95,10 @@ struct PlacementBar: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Text(scene.status)
+            Text(scene
+                .isAligning ?
+                "Drag to move, twist with two fingers to turn — Done when it overlays the real robot." : scene
+                .status)
                 .font(.caption)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
@@ -110,10 +113,18 @@ struct PlacementBar: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(session.urdfRobot == nil || scene.isBuilding)
 
+                Button {
+                    scene.isAligning.toggle()
+                } label: {
+                    Label(scene.isAligning ? "Done" : "Align", systemImage: "move.3d")
+                }
+                .buttonStyle(.bordered)
+                .disabled(!scene.isPlaced)
+
                 Button(role: .destructive) {
                     scene.request = .remove
                 } label: {
-                    Label("Remove", systemImage: "trash")
+                    Image(systemName: "trash")
                 }
                 .buttonStyle(.bordered)
                 .disabled(!scene.isPlaced)
