@@ -75,8 +75,8 @@ public struct ARBridgeClient: Sendable {
     }
 
     /// `POST /v0/cloud` — body is binary PLY (`LiDARScan.PLYCodec.encode`). `frameId` is the
-    /// frame the points are already expressed in (pre-M4: an AR-session-local frame; `base_link`
-    /// once M4's alignment exists — see `docs/protocols/ar_bridge_http.md`).
+    /// frame the points are already expressed in — see `docs/protocols/ar_bridge_http.md` for
+    /// the `base_link`/`map` convention this app's caller follows pre-M4.
     public func uploadCloud(
         _ data: Data, frameId: String, name: String? = nil, mode: CloudUploadMode = .replace
     ) async throws -> CloudUploadResult {

@@ -52,6 +52,9 @@ struct ARContainerView: UIViewRepresentable {
         private let scanScene: ScanScene
         private weak var arView: ARView?
         private var anchor: AnchorEntity?
+        /// The AR-world pose the robot was placed at (`hit.worldTransform`), kept around purely
+        /// so a scan upload can register itself against it — see `uploadScan`.
+        private var placementTransform: simd_float4x4?
         private var robot: RobotEntity?
         private var mapper: JointStateMapper?
         private var smoother = JointSmoother(tau: 0.06)
@@ -61,10 +64,12 @@ struct ARContainerView: UIViewRepresentable {
         private var uploadTask: Task<Void, Never>?
         private let log = Logger(subsystem: "io.github.louridoc.mrros", category: "ARContainer")
 
-        /// Accumulated across `.capture` requests, already in the ROS/`base_link` frame
-        /// convention (M4 alignment not built yet, so really "AR session origin" for now — see
-        /// `ARBridgeClient.uploadCloud`). Re-voxelized after every capture so repeated taps don't
-        /// make the cloud grow without bound from re-scanning the same surfaces.
+        /// Accumulated across `.capture` requests: ROS axis convention (rotation only, via
+        /// `FrameConventions`) but still relative to the AR session's arbitrary origin — the
+        /// registration against wherever the robot was placed happens at upload time in
+        /// `uploadScan`, not here, so re-placing the robot doesn't require re-scanning.
+        /// Re-voxelized after every capture so repeated taps don't make the cloud grow without
+        /// bound from re-scanning the same surfaces.
         private var scanCloud = PointCloud.empty
         private let scanVoxelSize: Float = 0.02
 
@@ -125,6 +130,7 @@ struct ARContainerView: UIViewRepresentable {
                 anchor.addChild(entity.root)
                 arView.scene.addAnchor(anchor)
                 self.anchor = anchor
+                placementTransform = hit.worldTransform
                 robot = entity
                 mapper = JointStateMapper(robot: urdf)
                 smoother = JointSmoother(
@@ -153,6 +159,7 @@ struct ARContainerView: UIViewRepresentable {
                 arView?.scene.removeAnchor(anchor)
             }
             anchor = nil
+            placementTransform = nil
             robot = nil
             mapper = nil
             scene.isPlaced = false
@@ -235,10 +242,30 @@ struct ARContainerView: UIViewRepresentable {
                 scanScene.status = "Connect to ar_bridge first (see connection settings)."
                 return
             }
+
+            // Pre-M4 registration: if the robot has been placed, re-express the scan relative
+            // to that placement (translation only — orientation nudging is M4's manual gizmo)
+            // so it lands roughly where the robot sits in RViz, instead of relative to an
+            // arbitrary AR session origin with no relationship to the room. Recomputed from
+            // whatever the CURRENT placement is at upload time, not baked in at capture time,
+            // so re-placing the robot doesn't require re-scanning.
+            let frameId: String
+            let toUpload: PointCloud
+            if let placementTransform {
+                let t = placementTransform.columns.3
+                let originROS = FrameConventions.toROS(point: SIMD3(t.x, t.y, t.z))
+                toUpload = Self.subtracting(originROS, from: scanCloud)
+                frameId = "base_link"
+            } else {
+                toUpload = scanCloud
+                frameId = "map"
+                scanScene.status = "No robot placed — uploading unregistered (frame \"map\")."
+            }
+
             let client = ARBridgeClient(baseURL: arBridgeURL)
-            let data = PLYCodec.encode(scanCloud)
+            let data = PLYCodec.encode(toUpload)
             scanScene.isUploading = true
-            scanScene.status = "Uploading \(scanCloud.count) points…"
+            scanScene.status = "Uploading \(toUpload.count) points…"
             uploadTask?.cancel()
             uploadTask = Task { [weak self] in
                 guard let self else { return }
@@ -246,8 +273,8 @@ struct ARContainerView: UIViewRepresentable {
                     // Fixed name + `.replace`: the client already holds the full accumulated,
                     // voxel-filtered state, so every upload fully replaces the latched topic and
                     // the on-disk file rather than relying on the server's append accumulator.
-                    let result = try await client.uploadCloud(data, frameId: "map", name: "live_scan")
-                    scanScene.lastUploadSummary = "\(result.points) pts → \(result.topic)"
+                    let result = try await client.uploadCloud(data, frameId: frameId, name: "live_scan")
+                    scanScene.lastUploadSummary = "\(result.points) pts → \(result.topic) (\(frameId))"
                     scanScene.status = "Uploaded \(result.points) points."
                 } catch {
                     log.error("cloud upload failed: \(String(describing: error), privacy: .public)")
@@ -255,6 +282,17 @@ struct ARContainerView: UIViewRepresentable {
                 }
                 scanScene.isUploading = false
             }
+        }
+
+        private static func subtracting(_ origin: SIMD3<Float>, from cloud: PointCloud) -> PointCloud {
+            guard !cloud.isEmpty else { return cloud }
+            return PointCloud(
+                x: cloud.x.map { $0 - origin.x },
+                y: cloud.y.map { $0 - origin.y },
+                z: cloud.z.map { $0 - origin.z },
+                confidence: cloud.confidence,
+                color: cloud.color
+            )
         }
 
         // MARK: Per-frame

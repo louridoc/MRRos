@@ -14,7 +14,7 @@ Body: binary PLY (little-endian, `x y z` float32, optional `confidence` uint8, o
 
 | param | required | meaning |
 |---|---|---|
-| `frame_id` | yes | frame the points are already expressed in (pre-M4: an AR-session-local frame, e.g. `map`; `base_link` once alignment exists) |
+| `frame_id` | yes | frame the points are already expressed in: `base_link` if the robot has been placed (translation-only registration against the placement anchor — see `ARContainerView.Coordinator.uploadScan`), else `map` (raw AR session origin, unregistered). Full 6-DOF registration is M4's manual gizmo. |
 | `name` | no | file stem AND the `mode=append` accumulation key; default an ISO-ish UTC timestamp (`%Y%m%dT%H%M%SZ`) |
 | `mode` | no | `replace` (default, overwrites `name`'s accumulator) or `append` (concatenates onto whatever was last stored under `name`; missing `confidence`/`color` columns on either side are backfilled with 0/black rather than dropped — see `ply.merge`) |
 

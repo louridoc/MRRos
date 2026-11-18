@@ -111,11 +111,25 @@ Device drill:
 - [x] Real on-device scan (CRX-30iA dev bringup): app captured and uploaded a real
       `ARMeshAnchor`-derived cloud (10801 → 48893 points across several captures), `ar_bridge`
       logged it received and published each one (2026-11-17)
-- [ ] Cloud confirmed visible in RViz relative to the real room — blocked by the `map`-frame bug
-      below, fix not yet re-tested on device
+- [x] Cloud confirmed visible in RViz, resembling the real room, after the `map`-frame fix
+      below (2026-11-17)
+- [ ] Cloud roughly aligned with the placed robot — not yet re-tested on device after the
+      placement-registration fix below
 - [ ] "1M-point upload < 5 s on Wi-Fi" timing — not yet measured
 
 Findings log:
+- 2026-11-17: user placed the robot, then scanned, and expected the cloud to land roughly where
+  the robot was placed — it didn't, because the scan was uploaded relative to the AR session's
+  arbitrary world origin (`frame_id=map`) with no relationship to the placement anchor at all.
+  Fixed in `ARContainerView.Coordinator`: `place()` now remembers `hit.worldTransform`
+  (`placementTransform`); `uploadScan()` re-expresses the scan relative to that anchor's
+  position (translation only — full 6-DOF is still M4's manual gizmo) and uploads with
+  `frame_id=base_link` whenever a robot is placed, falling back to the old unregistered `map`
+  behavior only if nothing has been placed yet. Recomputed fresh at upload time (not baked in at
+  capture time) so re-placing the robot doesn't require re-scanning.
+- 2026-11-17: the Scan controls were a `.sheet` (`ScanSheet`), which covers the camera feed while
+  open — unusable for a workflow that requires watching the room while tapping Capture. Replaced
+  with `ScanBar`, an always-visible overlay over the AR view, same pattern as `PlacementBar`.
 - 2026-11-17: on-device scan uploaded successfully (`ar_bridge` logged the correct point counts)
   but never appeared in RViz. Root cause: the app uploads with `frame_id=map` (by design, see
   `ar_bridge_http.md` — `map` is a placeholder pre-M4 since there's no real alignment yet), but
