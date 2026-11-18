@@ -79,6 +79,10 @@ struct ARContainerView: UIViewRepresentable {
         /// against this, recomputed fresh at upload time (see `uploadScan`).
         private var alignment: AlignmentTransform?
         private var wasAligning = false
+        /// Captured on `.began` so `handlePan` can move the robot by how far the touch has
+        /// moved since then (a delta), rather than snapping it to the touch's absolute
+        /// floor-projection every event — see `handlePan`.
+        private var panStart: (touchPoint: SIMD3<Float>, alignmentPosition: SIMD3<Float>)?
         private var robot: RobotEntity?
         private var mapper: JointStateMapper?
         private var smoother = JointSmoother(tau: 0.06)
@@ -187,6 +191,7 @@ struct ARContainerView: UIViewRepresentable {
             anchor = nil
             gizmo = nil
             alignment = nil
+            panStart = nil
             robot = nil
             mapper = nil
             scene.isPlaced = false
@@ -232,14 +237,34 @@ struct ARContainerView: UIViewRepresentable {
         }
 
         @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
-            guard scene.isAligning, let arView, let alignment, recognizer.state == .changed,
-                  let p = Self.intersection(
-                      ofRayThrough: recognizer.location(in: arView),
-                      in: arView,
-                      atHeight: alignment.position.y
-                  ) else { return }
-            self.alignment?.position = p
-            applyAlignmentToAnchor()
+            guard scene.isAligning, let arView, let alignment else { return }
+
+            switch recognizer.state {
+            case .began:
+                guard let p = Self.intersection(
+                    ofRayThrough: recognizer.location(in: arView), in: arView, atHeight: alignment.position.y
+                ) else { return }
+                panStart = (touchPoint: p, alignmentPosition: alignment.position)
+
+            case .changed:
+                guard let panStart,
+                      let p = Self.intersection(
+                          ofRayThrough: recognizer.location(in: arView), in: arView,
+                          atHeight: alignment.position.y
+                      )
+                else { return }
+                // Move by how far the touch's floor-projection has moved since `.began`, not to
+                // the touch's absolute projection — the latter snaps the robot to wherever your
+                // finger happens to be and amplifies wildly at shallow viewing angles.
+                self.alignment?.position = panStart.alignmentPosition + (p - panStart.touchPoint)
+                applyAlignmentToAnchor()
+
+            case .ended, .cancelled, .failed:
+                panStart = nil
+
+            default:
+                break
+            }
         }
 
         /// Where the camera ray through `point` crosses the horizontal plane `y = height`, in AR

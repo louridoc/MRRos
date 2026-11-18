@@ -204,6 +204,18 @@ re-verified on device:
   the robot's own current height (`ARView.ray(through:)`, no ARKit plane detection involved at
   all) — the Y coordinate can no longer drift from a bad plane hit.
 
+Device drill, second attempt (2026-11-17): dragging was "awful" — reported symptoms were
+"too sensitive / overshoots" and "snaps to the wrong place" (rotation untested). Root cause:
+`handlePan` set the robot's position to the *absolute* ray/floor-plane projection of the touch
+point on every `.changed` event, rather than moving it by how far the touch had moved. That
+snaps the robot to wherever your finger currently is (not where you started touching — "wrong
+place"), and at shallow viewing angles a small finger movement maps to a large change in that
+projected point ("overshoots"). Fixed by switching to relative-delta dragging: `.began` records
+the touch's floor-projection and the alignment's starting position; `.changed` moves by the
+difference between the current and starting projections, added to the starting position — the
+standard pattern for dragging an object across a plane in AR, used by essentially every
+placement app. Not yet re-verified on device.
+
 Device drill, not yet (re-)done:
 - [ ] Virtual robot overlays the real one after dragging/rotating with the gizmo
 - [ ] A cloud of a box placed at a measured offset appears at that offset in RViz (quantitative
