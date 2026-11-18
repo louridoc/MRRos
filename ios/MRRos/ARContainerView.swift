@@ -1,7 +1,9 @@
+import AlignmentKit
 import AppCore
 import ARBridgeTransport
 import ARKit
 import Combine
+import LiDARScan
 import MeshProvider
 import os
 import RealityKit
@@ -14,6 +16,7 @@ import URDFKit
 struct ARContainerView: UIViewRepresentable {
     let session: ROSSession
     let scene: RobotScene
+    let scanScene: ScanScene
 
     func makeUIView(context: Context) -> ARView {
         let view = ARView(frame: .zero)
@@ -34,10 +37,11 @@ struct ARContainerView: UIViewRepresentable {
 
     func updateUIView(_ uiView: ARView, context: Context) {
         context.coordinator.handleRequest()
+        context.coordinator.handleScanRequest()
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(session: session, scene: scene)
+        Coordinator(session: session, scene: scene, scanScene: scanScene)
     }
 
     /// Owns the robot entity and drives it from `/joint_states` on every rendered frame.
@@ -45,15 +49,29 @@ struct ARContainerView: UIViewRepresentable {
     final class Coordinator {
         private let session: ROSSession
         private let scene: RobotScene
+        private let scanScene: ScanScene
         private weak var arView: ARView?
         private var anchor: AnchorEntity?
+        /// The AR-world pose the robot was placed at (`hit.worldTransform`), kept around purely
+        /// so a scan upload can register itself against it — see `uploadScan`.
+        private var placementTransform: simd_float4x4?
         private var robot: RobotEntity?
         private var mapper: JointStateMapper?
         private var smoother = JointSmoother(tau: 0.06)
         private var lastStamp: ROSTime?
         private var updateSubscription: Cancellable?
         private var buildTask: Task<Void, Never>?
+        private var uploadTask: Task<Void, Never>?
         private let log = Logger(subsystem: "io.github.louridoc.mrros", category: "ARContainer")
+
+        /// Accumulated across `.capture` requests: ROS axis convention (rotation only, via
+        /// `FrameConventions`) but still relative to the AR session's arbitrary origin — the
+        /// registration against wherever the robot was placed happens at upload time in
+        /// `uploadScan`, not here, so re-placing the robot doesn't require re-scanning.
+        /// Re-voxelized after every capture so repeated taps don't make the cloud grow without
+        /// bound from re-scanning the same surfaces.
+        private var scanCloud = PointCloud.empty
+        private let scanVoxelSize: Float = 0.02
 
         /// Built fresh per placement from the session's CURRENT host, so a reconnect to a
         /// different lab PC (or ar_bridge simply coming up after rosbridge) is picked up without
@@ -64,9 +82,10 @@ struct ARContainerView: UIViewRepresentable {
             return .standard(arBridge: ARBridgeClient(baseURL: arBridgeURL))
         }
 
-        init(session: ROSSession, scene: RobotScene) {
+        init(session: ROSSession, scene: RobotScene, scanScene: ScanScene) {
             self.session = session
             self.scene = scene
+            self.scanScene = scanScene
         }
 
         func attach(_ view: ARView) {
@@ -111,6 +130,7 @@ struct ARContainerView: UIViewRepresentable {
                 anchor.addChild(entity.root)
                 arView.scene.addAnchor(anchor)
                 self.anchor = anchor
+                placementTransform = hit.worldTransform
                 robot = entity
                 mapper = JointStateMapper(robot: urdf)
                 smoother = JointSmoother(
@@ -139,12 +159,140 @@ struct ARContainerView: UIViewRepresentable {
                 arView?.scene.removeAnchor(anchor)
             }
             anchor = nil
+            placementTransform = nil
             robot = nil
             mapper = nil
             scene.isPlaced = false
             scene.isBuilding = false
             scene.placedRobotName = nil
             scene.placeholders = []
+        }
+
+        // MARK: Scanning
+
+        func handleScanRequest() {
+            guard let request = scanScene.request else { return }
+            scanScene.request = nil
+            switch request {
+            case .capture: captureScan()
+            case .clear: clearScan()
+            case .upload: uploadScan()
+            }
+        }
+
+        /// Pulls vertices out of every `ARMeshAnchor` currently in the session's fused scene
+        /// mesh (LiDAR-backed, already deduplicated by ARKit across overlapping frames — a much
+        /// better "static point cloud of the environment" source than raw per-frame depth
+        /// points), converts world space → ROS, and folds them into the running scan.
+        private func captureScan() {
+            guard let frame = arView?.session.currentFrame else {
+                scanScene.status = "No AR frame yet — point the camera around first."
+                return
+            }
+            let meshAnchors = frame.anchors.compactMap { $0 as? ARMeshAnchor }
+            guard !meshAnchors.isEmpty else {
+                scanScene.status = "No scene mesh yet — move around a bit so LiDAR can see the room."
+                return
+            }
+
+            var batch = PointCloud.empty
+            var bx: [Float] = [], by: [Float] = [], bz: [Float] = []
+            for meshAnchor in meshAnchors {
+                for worldVertex in Self.worldVertices(of: meshAnchor) {
+                    let rosPoint = FrameConventions.toROS(point: worldVertex)
+                    bx.append(rosPoint.x); by.append(rosPoint.y); bz.append(rosPoint.z)
+                }
+            }
+            batch = PointCloud(x: bx, y: by, z: bz, confidence: [UInt8](repeating: 2, count: bx.count))
+
+            scanCloud.append(batch)
+            scanCloud = VoxelFilter.downsample(scanCloud, voxelSize: scanVoxelSize)
+            scanScene.pointCount = scanCloud.count
+            scanScene.status = "\(scanCloud.count) points scanned so far."
+        }
+
+        private static func worldVertices(of meshAnchor: ARMeshAnchor) -> [SIMD3<Float>] {
+            let source = meshAnchor.geometry.vertices
+            let transform = meshAnchor.transform
+            var points: [SIMD3<Float>] = []
+            points.reserveCapacity(source.count)
+            let buffer = source.buffer.contents()
+            for i in 0 ..< source.count {
+                let vertexPointer = buffer.advanced(by: source.offset + i * source.stride)
+                let local = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
+                let world = transform * SIMD4(local, 1)
+                points.append(SIMD3(world.x, world.y, world.z))
+            }
+            return points
+        }
+
+        private func clearScan() {
+            scanCloud = .empty
+            scanScene.pointCount = 0
+            scanScene.lastUploadSummary = nil
+            scanScene.status = "Scan cleared. Move around, then capture again."
+        }
+
+        private func uploadScan() {
+            guard !scanCloud.isEmpty else {
+                scanScene.status = "Nothing to upload yet — capture a scan first."
+                return
+            }
+            guard let arBridgeURL = session.settings.arBridgeURL else {
+                scanScene.status = "Connect to ar_bridge first (see connection settings)."
+                return
+            }
+
+            // Pre-M4 registration: if the robot has been placed, re-express the scan relative
+            // to that placement (translation only — orientation nudging is M4's manual gizmo)
+            // so it lands roughly where the robot sits in RViz, instead of relative to an
+            // arbitrary AR session origin with no relationship to the room. Recomputed from
+            // whatever the CURRENT placement is at upload time, not baked in at capture time,
+            // so re-placing the robot doesn't require re-scanning.
+            let frameId: String
+            let toUpload: PointCloud
+            if let placementTransform {
+                let t = placementTransform.columns.3
+                let originROS = FrameConventions.toROS(point: SIMD3(t.x, t.y, t.z))
+                toUpload = Self.subtracting(originROS, from: scanCloud)
+                frameId = "base_link"
+            } else {
+                toUpload = scanCloud
+                frameId = "map"
+                scanScene.status = "No robot placed — uploading unregistered (frame \"map\")."
+            }
+
+            let client = ARBridgeClient(baseURL: arBridgeURL)
+            let data = PLYCodec.encode(toUpload)
+            scanScene.isUploading = true
+            scanScene.status = "Uploading \(toUpload.count) points…"
+            uploadTask?.cancel()
+            uploadTask = Task { [weak self] in
+                guard let self else { return }
+                do {
+                    // Fixed name + `.replace`: the client already holds the full accumulated,
+                    // voxel-filtered state, so every upload fully replaces the latched topic and
+                    // the on-disk file rather than relying on the server's append accumulator.
+                    let result = try await client.uploadCloud(data, frameId: frameId, name: "live_scan")
+                    scanScene.lastUploadSummary = "\(result.points) pts → \(result.topic) (\(frameId))"
+                    scanScene.status = "Uploaded \(result.points) points."
+                } catch {
+                    log.error("cloud upload failed: \(String(describing: error), privacy: .public)")
+                    scanScene.status = "Upload failed: \(error)"
+                }
+                scanScene.isUploading = false
+            }
+        }
+
+        private static func subtracting(_ origin: SIMD3<Float>, from cloud: PointCloud) -> PointCloud {
+            guard !cloud.isEmpty else { return cloud }
+            return PointCloud(
+                x: cloud.x.map { $0 - origin.x },
+                y: cloud.y.map { $0 - origin.y },
+                z: cloud.z.map { $0 - origin.z },
+                confidence: cloud.confidence,
+                color: cloud.color
+            )
         }
 
         // MARK: Per-frame

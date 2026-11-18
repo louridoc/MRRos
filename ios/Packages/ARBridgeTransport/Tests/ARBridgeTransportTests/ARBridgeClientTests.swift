@@ -95,4 +95,74 @@ struct ARBridgeClientTests {
         let r = HTTPResponse(statusCode: 200, data: Data(), headers: ["x-mesh-sha256": "abc"])
         #expect(r.header("X-Mesh-SHA256") == "abc")
     }
+
+    // MARK: - uploadCloud
+
+    @Test func uploadCloudSendsBodyAndQueryThenDecodesTheResult() async throws {
+        let mock = MockHTTPTransport()
+        let json = """
+        {"points": 430, "file": "/x/myscan.pcd", "topic": "/mrros/static_cloud"}
+        """
+        await mock.respond(
+            whenURLContains: "/v0/cloud",
+            with: HTTPResponse(statusCode: 200, data: Data(json.utf8), headers: [:])
+        )
+        let client = ARBridgeClient(baseURL: baseURL, transport: mock)
+        let plyBytes = Data("fake ply bytes".utf8)
+        let result = try await client.uploadCloud(plyBytes, frameId: "map", name: "myscan", mode: .append)
+        #expect(result == CloudUploadResult(points: 430, file: "/x/myscan.pcd", topic: "/mrros/static_cloud"))
+
+        #expect(await mock.postedBodies == [plyBytes])
+        let url = try #require(await mock.requestedURLs.first)
+        let q = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        #expect(q.contains(URLQueryItem(name: "frame_id", value: "map")))
+        #expect(q.contains(URLQueryItem(name: "mode", value: "append")))
+        #expect(q.contains(URLQueryItem(name: "name", value: "myscan")))
+    }
+
+    @Test func uploadCloudDefaultsToReplaceModeAndOmitsNameWhenNil() async throws {
+        let mock = MockHTTPTransport()
+        await mock.respond(
+            whenURLContains: "/v0/cloud",
+            with: HTTPResponse(
+                statusCode: 200,
+                data: Data(#"{"points": 1, "file": "/x.pcd", "topic": "/t"}"#.utf8), headers: [:]
+            )
+        )
+        let client = ARBridgeClient(baseURL: baseURL, transport: mock)
+        _ = try await client.uploadCloud(Data(), frameId: "map")
+        let url = try #require(await mock.requestedURLs.first)
+        let q = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        #expect(q.contains(URLQueryItem(name: "mode", value: "replace")))
+        #expect(!q.contains { $0.name == "name" })
+    }
+
+    @Test(arguments: [
+        (400, ARBridgeError.badRequest("bad")),
+        (413, ARBridgeError.payloadTooLarge("bad")),
+        (501, ARBridgeError.notImplemented("bad")),
+    ])
+    func uploadCloudMapsStatusCodesToTypedErrors(status: Int, expected: ARBridgeError) async {
+        let mock = MockHTTPTransport()
+        await mock.respond(
+            whenURLContains: "/v0/cloud",
+            with: HTTPResponse(statusCode: status, data: Data("bad".utf8), headers: [:])
+        )
+        let client = ARBridgeClient(baseURL: baseURL, transport: mock)
+        await #expect(throws: expected) {
+            _ = try await client.uploadCloud(Data(), frameId: "map")
+        }
+    }
+
+    @Test func uploadCloudMalformedJSONBodyIsAMalformedResponseError() async {
+        let mock = MockHTTPTransport()
+        await mock.respond(
+            whenURLContains: "/v0/cloud",
+            with: HTTPResponse(statusCode: 200, data: Data("not json".utf8), headers: [:])
+        )
+        let client = ARBridgeClient(baseURL: baseURL, transport: mock)
+        await #expect(throws: ARBridgeError.self) {
+            _ = try await client.uploadCloud(Data(), frameId: "map")
+        }
+    }
 }

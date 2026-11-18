@@ -84,3 +84,74 @@ before any device check, same discipline as M2a:
       appeared correctly, fetched meshes loaded over the network (2026-11-17)
 
 M2b exit test met (2026-11-17), Mac-side and device.
+
+## M3 — Scan → RViz
+Automated: `tools/ios-test.sh LiDARScan AlignmentKit ARBridgeTransport` (PLY encode/decode
+round-trip incl. a regression test for the small-cloud ASCII-prefix bug below, voxel filter,
+`uploadCloud` query/body/status-mapping against a mocked transport), `cd ros2_ws && tools/ros.sh
+jazzy pytest -q` (`ply.py` decode/encode/merge incl. a fixture shaped like the Swift encoder's
+exact header, `cloud.py`'s `build_point_cloud2`/`write_pcd`/`ingest`, `/v0/cloud`'s error-status
+mapping in `http_api.py`).
+
+Mac-side end-to-end check (no phone), same discipline as M2b:
+- [x] `ros2 run ar_bridge ar_bridge` alone (no bringup needed for this endpoint) → hand-built
+      420-point colored PLY POSTed to `/v0/cloud?frame_id=map&name=m3test` via curl: `200` with
+      correct point count, `.pcd` file on disk with the right header/point count, topic
+      structurally correct via `ros2 topic echo` (5 fields incl. packed `rgb`, 20-byte aligned
+      `point_step`), and visually confirmed in a live RViz (floor + wall, correct colors) (2026-11-17)
+- [x] Second POST with `mode=append` and no confidence/color (tests the backfill path) →
+      420+10=430 points, confirmed via `ros2 topic echo` (2026-11-17)
+- [x] Real Swift-side client (`LiDARScan.PLYCodec.encode` → `ARBridgeTransport.ARBridgeClient.
+      uploadCloud` over real `URLSessionHTTPTransport`, not the mocked transport) against the
+      live node: 5000-point cloud uploaded and accepted (2026-11-17)
+- [x] Full app target builds (`tools/ios-build.sh`) with the capture/preview/upload UI
+      (`ScanScene`, `ScanSheet`, `ARContainerView.Coordinator.captureScan/clearScan/uploadScan`)
+
+Device drill:
+- [x] Real on-device scan (CRX-30iA dev bringup): app captured and uploaded a real
+      `ARMeshAnchor`-derived cloud (10801 → 48893 points across several captures), `ar_bridge`
+      logged it received and published each one (2026-11-17)
+- [x] Cloud confirmed visible in RViz, resembling the real room, after the `map`-frame fix
+      below (2026-11-17)
+- [ ] Cloud roughly aligned with the placed robot — not yet re-tested on device after the
+      placement-registration fix below
+- [x] 1M-point upload timing: 1.6 s end-to-end over loopback (decode 0.02 s, `build_point_cloud2`
+      0.37 s, `write_pcd` 1.2 s) after the fix below — comfortably under 5 s with real Wi-Fi
+      transfer time added on top (2026-11-17)
+
+Findings log:
+- 2026-11-17: profiled the 1M-point ingest and found `write_pcd`'s Python per-point f-string
+  loop was ~1.94 s of a 2.32 s total — nearly the whole cost. Replaced with `np.savetxt`
+  (vectorized in C): 1.94 s → 1.2 s, total ingest 2.32 s → 1.59 s. Also moved `ingest()` (not
+  just `decode()`) onto `run_in_executor` in `node.py`'s `_on_cloud`, since it was blocking the
+  whole event loop (including concurrent `/health`/`/v0/mesh` requests) for that whole duration
+  — `clock_now` is read before dispatching, not inside the executor thread, to avoid calling
+  rclpy's clock off the node's own thread.
+- 2026-11-17: user placed the robot, then scanned, and expected the cloud to land roughly where
+  the robot was placed — it didn't, because the scan was uploaded relative to the AR session's
+  arbitrary world origin (`frame_id=map`) with no relationship to the placement anchor at all.
+  Fixed in `ARContainerView.Coordinator`: `place()` now remembers `hit.worldTransform`
+  (`placementTransform`); `uploadScan()` re-expresses the scan relative to that anchor's
+  position (translation only — full 6-DOF is still M4's manual gizmo) and uploads with
+  `frame_id=base_link` whenever a robot is placed, falling back to the old unregistered `map`
+  behavior only if nothing has been placed yet. Recomputed fresh at upload time (not baked in at
+  capture time) so re-placing the robot doesn't require re-scanning.
+- 2026-11-17: the Scan controls were a `.sheet` (`ScanSheet`), which covers the camera feed while
+  open — unusable for a workflow that requires watching the room while tapping Capture. Replaced
+  with `ScanBar`, an always-visible overlay over the AR view, same pattern as `PlacementBar`.
+- 2026-11-17: on-device scan uploaded successfully (`ar_bridge` logged the correct point counts)
+  but never appeared in RViz. Root cause: the app uploads with `frame_id=map` (by design, see
+  `ar_bridge_http.md` — `map` is a placeholder pre-M4 since there's no real alignment yet), but
+  `dev.launch.py` never published a `map` TF frame at all, and `dev.rviz`'s `PointCloud2` display
+  (which *was* correctly configured — a `grep` miss during triage falsely suggested otherwise,
+  due to BSD `grep`'s `\|` not meaning alternation) had no way to transform into Fixed Frame
+  `base_link`. Verified all 7 robots in `robots.py` root their TF tree at `world` with no parent
+  (expanded every xacro and diffed link defs against joint children); fixed by adding a single
+  identity `static_transform_publisher` (`map` → `world`) to `dev.launch.py`, uniform across
+  robots. Verified via `tf2_echo map base_link` resolving to the expected 0.75 m CRX pedestal
+  offset. Not yet re-confirmed on device (next step).
+- 2026-11-17: `PLYCodec.parseHeader` (Swift) originally located `end_header` by decoding
+  `data.prefix(4096)` as ASCII — fails whenever a small cloud's binary payload falls inside that
+  window and isn't valid ASCII. Caught by self-review before running any tests, not by a test
+  failure; fixed by searching for the literal `end_header\n` byte marker first. Applied the same
+  fix proactively to the Python decoder (`ply.py`) and locked it in with a named regression test.

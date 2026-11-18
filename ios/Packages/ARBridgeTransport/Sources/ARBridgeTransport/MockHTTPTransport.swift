@@ -10,6 +10,7 @@ public actor MockHTTPTransport: HTTPTransport {
     private var responsesBySubstring: [(match: String, response: HTTPResponse)] = []
     private var errorsBySubstring: [(match: String, error: Error)] = []
     public private(set) var requestedURLs: [URL] = []
+    public private(set) var postedBodies: [Data] = []
 
     public init() {}
 
@@ -22,6 +23,15 @@ public actor MockHTTPTransport: HTTPTransport {
     }
 
     public func get(_ url: URL) async throws -> HTTPResponse {
+        try respond(to: url)
+    }
+
+    public func post(_ url: URL, body: Data) async throws -> HTTPResponse {
+        postedBodies.append(body)
+        return try respond(to: url)
+    }
+
+    private func respond(to url: URL) throws -> HTTPResponse {
         requestedURLs.append(url)
         let s = url.absoluteString
         if let hit = errorsBySubstring.first(where: { s.contains($0.match) }) {

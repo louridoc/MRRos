@@ -41,6 +41,13 @@ public enum FrameConventions {
         return SIMD3(v.x, v.y, v.z)
     }
 
+    /// `Float` variant for hot paths over ARKit data (mesh vertices, depth points), which is
+    /// natively `simd_float3` — avoids a Double round-trip per point at scan scale.
+    public static func toROS(point p: SIMD3<Float>) -> SIMD3<Float> {
+        let v = arToROSFloat * SIMD4(p, 1)
+        return SIMD3(v.x, v.y, v.z)
+    }
+
     // MARK: Full transforms
 
     /// A pose expressed in ROS coordinates (e.g. a link in `base_link`) becomes the same pose

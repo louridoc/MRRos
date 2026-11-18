@@ -6,11 +6,12 @@ import SwiftUI
 struct ContentView: View {
     @State private var session = ROSSession()
     @State private var scene = RobotScene()
+    @State private var scanScene = ScanScene()
     @State private var showConnection = false
 
     var body: some View {
         ZStack {
-            ARContainerView(session: session, scene: scene)
+            ARContainerView(session: session, scene: scene, scanScene: scanScene)
                 .ignoresSafeArea()
             VStack(spacing: 10) {
                 StatusStrip(session: session) { showConnection = true }
@@ -24,6 +25,10 @@ struct ContentView: View {
                     .padding(.horizontal)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
+                // Both bars float directly over the live camera feed (never a sheet) — a scan
+                // is only useful if you can see where you're pointing the phone while you tap.
+                ScanBar(scanScene: scanScene)
+                    .padding(.horizontal)
                 PlacementBar(session: session, scene: scene)
                     .padding(.horizontal)
                     .padding(.bottom, 12)
@@ -33,6 +38,53 @@ struct ContentView: View {
         .sheet(isPresented: $showConnection) {
             ConnectionSheet(session: session)
         }
+    }
+}
+
+/// Capture/clear/upload the environment scan — an overlay, not a sheet, so the AR camera feed
+/// (what you're actually using to aim the scan) stays visible the whole time.
+struct ScanBar: View {
+    @Bindable var scanScene: ScanScene
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text(scanScene.status)
+                .font(.caption)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                Button {
+                    scanScene.request = .capture
+                } label: {
+                    Label("Capture", systemImage: "camera.metering.matrix")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button(role: .destructive) {
+                    scanScene.request = .clear
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.bordered)
+                .disabled(scanScene.pointCount == 0)
+
+                Button {
+                    scanScene.request = .upload
+                } label: {
+                    if scanScene.isUploading {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "arrow.up.circle")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(scanScene.pointCount == 0 || scanScene.isUploading)
+            }
+        }
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 }
 

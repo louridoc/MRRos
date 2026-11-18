@@ -41,6 +41,20 @@ async def test_cloud_handler_receives_bytes_and_query():
     assert seen == {"data": b"PLY", "meta": {"frame_id": "map"}}
 
 
+async def test_cloud_handler_maps_resolver_error_status():
+    class Boom(Exception):
+        status = 400
+
+    async def on_cloud(data: bytes, meta: dict[str, str]) -> dict:
+        raise Boom("malformed PLY")
+
+    app = make_app(Handlers(on_cloud=on_cloud))
+    async with TestClient(TestServer(app)) as c:
+        r = await c.post("/v0/cloud", params={"frame_id": "map"}, data=b"not ply")
+        assert r.status == 400
+        assert "malformed PLY" in await r.text()
+
+
 async def test_mesh_handler_returns_body_content_type_and_sha_header():
     async def get_mesh(uri: str):
         assert uri == "package://pkg/a.obj"
