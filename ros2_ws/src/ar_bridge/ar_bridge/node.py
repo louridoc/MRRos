@@ -19,6 +19,7 @@ from builtin_interfaces.msg import Time
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import PointCloud2
+from std_srvs.srv import Empty
 
 from ar_bridge.cloud import ingest
 from ar_bridge.http_api import Handlers, MeshResult, make_app
@@ -40,6 +41,9 @@ class ARBridge(Node):
         self.declare_parameter("output_dir", os.path.expanduser("~/.mrros/clouds"))
         self.declare_parameter("mesh_cache_dir", os.path.expanduser("~/.mrros/mesh_cache"))
         self.declare_parameter("cloud_topic", "/mrros/static_cloud")
+        # MoveIt's octomap only ever adds what it's sent; clear it before each publish so an
+        # upload REPLACES the scene there too. Empty string disables. No-op without MoveIt.
+        self.declare_parameter("clear_octomap_service", "/clear_octomap")
 
         self.port = int(self.get_parameter("http_port").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
@@ -48,6 +52,8 @@ class ARBridge(Node):
         self.mesh_cache = MeshCache(str(self.get_parameter("mesh_cache_dir").value))
         self.cloud_topic = str(self.get_parameter("cloud_topic").value)
         self.cloud_pub = self.create_publisher(PointCloud2, self.cloud_topic, _LATCHED_QOS)
+        clear_srv = str(self.get_parameter("clear_octomap_service").value)
+        self._clear_octomap = self.create_client(Empty, clear_srv) if clear_srv else None
         # One accumulator per `name` (mode=append target); see docs/protocols/ar_bridge_http.md.
         self._clouds: dict[str, DecodedCloud] = {}
 
@@ -100,16 +106,34 @@ class ARBridge(Node):
                 clock_now=stamp,
             ),
         )
+        cleared = await self._clear_moveit_octomap()
         self.cloud_pub.publish(result.message)
         self.get_logger().info(
             f"cloud '{name}' ({mode}): {result.point_count} pts -> {self.cloud_topic}, "
-            f"{result.pcd_path}"
+            f"{result.pcd_path}{' (MoveIt octomap cleared first)' if cleared else ''}"
         )
         return {
             "points": result.point_count,
             "file": str(result.pcd_path),
             "topic": self.cloud_topic,
         }
+
+    async def _clear_moveit_octomap(self, timeout_s: float = 2.0) -> bool:
+        """Clears MoveIt's octomap if move_group is up. Every published cloud is the complete
+        scan (replace) or the complete merged accumulator (append), so clearing first is right in
+        both modes. rclpy spins on its own thread; poll its future from asyncio with a timeout so
+        a stuck move_group can't hold up the upload."""
+        if self._clear_octomap is None or not self._clear_octomap.service_is_ready():
+            return False
+        future = self._clear_octomap.call_async(Empty.Request())
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        while not future.done():
+            if loop.time() > deadline:
+                self.get_logger().warning("clear_octomap timed out; publishing anyway")
+                return False
+            await asyncio.sleep(0.02)
+        return True
 
     def serve_forever(self) -> None:
         app = make_app(self.handlers, node_name=self.get_name())

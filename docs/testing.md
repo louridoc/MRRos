@@ -382,3 +382,13 @@ Findings log:
   intermittent `shape_mask: Missing transform` — the self-filter looks up robot link TF at the
   cloud's exact stamp, which ar_bridge set to "now", often newer than the last joint TF. ar_bridge
   now stamps the static cloud 0 (latest transform). 0 missing-transform errors in 9 runs since.
+- 2026-11-18 (device test): after Clear in the app and "Clear octomap" in RViz, new uploads still
+  showed old points. Two causes. (1) App: Clear only emptied our buffer, but Capture harvests
+  ARKit's whole fused scene mesh, so previously-seen surfaces came straight back — Clear now also
+  re-runs the session with `.resetSceneReconstruction` (tracking untouched: world frame, alignment
+  and robot stay; skipped on the restore path). (2) MoveIt: the octomap only ever adds; ar_bridge
+  now calls `/clear_octomap` before every publish (no-op without MoveIt, 2 s timeout), so an upload
+  replaces the scene there too — verified live (box → small far cloud: blocked pose becomes free).
+- 2026-11-18: OMPL occasionally accepted UR paths grazing the wall (state 9/25 rejected by
+  ValidateSolution) at MoveIt's default 0.5% collision-check step (~0.15 rad on ±360° joints).
+  Now 0.2% for every robot: 6/6 UR10e + 6/6 CRX-30iA --execute runs pass, planning ≤ 0.12 s.

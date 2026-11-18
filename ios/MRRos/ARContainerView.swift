@@ -350,7 +350,7 @@ struct ARContainerView: UIViewRepresentable {
             }
 
             remove()
-            clearScan()
+            clearScan(resetReconstruction: false)
             let config = ARContainerView.makeConfiguration()
             config.initialWorldMap = map
             arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
@@ -542,7 +542,18 @@ struct ARContainerView: UIViewRepresentable {
             return points
         }
 
-        private func clearScan() {
+        /// `resetReconstruction`: also restart ARKit's scene mesh, so the next Capture only contains
+        /// what's scanned from now on — Capture harvests ARKit's whole fused mesh, so clearing only
+        /// our buffer brought every previously-seen surface straight back. Tracking is NOT reset:
+        /// the world frame, the alignment and the placed robot all stay valid. Off for the restore
+        /// path, which has just re-run the session from the saved map itself.
+        private func clearScan(resetReconstruction: Bool = true) {
+            if resetReconstruction, let arView,
+               let config = arView.session.configuration?.copy() as? ARWorldTrackingConfiguration
+            {
+                config.initialWorldMap = nil // don't trigger a second relocalization
+                arView.session.run(config, options: [.resetSceneReconstruction])
+            }
             scanCloud = .empty
             scanScene.pointCount = 0
             scanScene.lastUploadSummary = nil

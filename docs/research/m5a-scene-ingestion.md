@@ -32,8 +32,8 @@ Findings that shape M5c **[verified]**:
    always, later intermittently. ar_bridge now stamps the static cloud **0 = latest transform**
    (the robot doesn't move during a scan). Verified: 9/9 runs on CRX + UR with no settle wait,
    including right after startup, zero missing-transform errors.
-3. ⇒ `ar_bridge` should **clear the octomap, then publish** on every upload and again whenever
-   move_group (re)appears (finding 1). The periodic refresh is no longer needed for finding 2.
+3. ⇒ `ar_bridge` should **clear the octomap, then publish** on every upload (**done**, 2026-11-18)
+   and again whenever move_group (re)appears (finding 1, still open → M5c). The periodic refresh is no longer needed for finding 2.
 
 End-to-end result **[verified]**, both priority vendors: a wall uploaded through ar_bridge's HTTP
 endpoint (the app's path) makes the blocked configuration invalid, the robot's own surface points

@@ -54,13 +54,14 @@ def _setup(context, *args, **kwargs):
     # parameterization + solution validation remain.
     ompl = moveit_config.planning_pipelines.get("ompl", {})
     ompl["response_adapters"] = [a for a in ompl.get("response_adapters", []) if "Ruckig" not in a]
-    # Collision-check motions at least as densely as MoveIt's default (0.005 of the state-space
-    # extent), set on the group we actually plan with. FANUC's ompl_planning.yaml configures a
-    # group named `arm` while its SRDF's group is `manipulator`, so its settings never applied;
-    # OMPL then accepted a path grazing a scanned wall that ValidateSolution rejected.
+    # Collision-check motions every 0.2% of the state-space extent, on the group we actually plan
+    # with. MoveIt's default 0.5% is ~0.15 rad per check on a UR (±360° joints) — coarse enough
+    # that OMPL accepted paths grazing a thin scanned wall, which ValidateSolution then rejected
+    # (seen on UR10e and CRX). FANUC's ompl_planning.yaml also keys its settings to group `arm`
+    # while its SRDF's group is `manipulator`, so its own value never applied.
     group = ompl.setdefault(spec.planning_group, {})
     group["longest_valid_segment_fraction"] = min(
-        group.get("longest_valid_segment_fraction", 0.005), 0.005
+        group.get("longest_valid_segment_fraction", 0.002), 0.002
     )
     octomap = {
         "octomap_frame": LaunchConfiguration("octomap_frame").perform(context),
