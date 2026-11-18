@@ -4,6 +4,7 @@
   ros2 launch ar_dev_bringup dev.launch.py robot:=ur30 rviz:=false frozen:=true
   ros2 launch ar_dev_bringup dev.launch.py robot:=ur30 rviz:=false positions:="0.1,-0.5,0.3,0,0.2,1"
   ros2 launch ar_dev_bringup dev.launch.py robot:=ur16e ar_bridge:=false   # skip ar_bridge
+  ros2 launch ar_dev_bringup dev.launch.py robot:=ur10e moveit:=true        # + move_group (M5)
 
 Works unchanged on Humble, Jazzy and Lyrical; distro-specific bits belong in distro.py.
 """
@@ -14,8 +15,11 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition
-from launch.launch_description_sources import AnyLaunchDescriptionSource
-from launch.substitutions import Command, LaunchConfiguration
+from launch.launch_description_sources import (
+    AnyLaunchDescriptionSource,
+    PythonLaunchDescriptionSource,
+)
+from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -89,7 +93,17 @@ def _setup(context, *args, **kwargs):
             "-d",
             os.path.join(get_package_share_directory("ar_dev_bringup"), "config", "dev.rviz"),
         ],
-        condition=IfCondition(LaunchConfiguration("rviz")),
+        condition=IfCondition(
+            PythonExpression(
+                [
+                    "'",
+                    LaunchConfiguration("rviz"),
+                    "' == 'true' and '",
+                    LaunchConfiguration("moveit"),
+                    "' != 'true'",
+                ]
+            )
+        ),
         output="log",
     )
 
@@ -101,7 +115,18 @@ def _setup(context, *args, **kwargs):
         output="screen",
     )
 
-    return [rsp, mock, map_to_world, rosbridge, rviz, ar_bridge]
+    # move_group + MoveIt's RViz (moveit.launch.py); the dev RViz is skipped when this is on so
+    # there aren't two RViz windows.
+    moveit = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("ar_dev_bringup"), "launch", "moveit.launch.py"
+            )
+        ),
+        launch_arguments={"robot": robot_key, "rviz": LaunchConfiguration("rviz")}.items(),
+        condition=IfCondition(LaunchConfiguration("moveit")),
+    )
+    return [rsp, mock, map_to_world, rosbridge, rviz, ar_bridge, moveit]
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -120,6 +145,9 @@ def generate_launch_description() -> LaunchDescription:
                 "ar_bridge", default_value="true", description="launch ar_bridge too"
             ),
             DeclareLaunchArgument("ar_bridge_port", default_value="8765"),
+            DeclareLaunchArgument(
+                "moveit", default_value="false", description="also launch move_group (M5)"
+            ),
             OpaqueFunction(function=_setup),
         ]
     )

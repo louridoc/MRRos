@@ -5,3 +5,6 @@
 humble	fanuc_description	https://github.com/FANUC-CORPORATION/fanuc_description.git	main
 jazzy	fanuc_description	https://github.com/FANUC-CORPORATION/fanuc_description.git	main
 lyrical	fanuc_description	https://github.com/FANUC-CORPORATION/fanuc_description.git	main
+humble	fanuc_driver	https://github.com/FANUC-CORPORATION/fanuc_driver.git	humble
+jazzy	fanuc_driver	https://github.com/FANUC-CORPORATION/fanuc_driver.git	jazzy
+lyrical	fanuc_driver	https://github.com/FANUC-CORPORATION/fanuc_driver.git	main

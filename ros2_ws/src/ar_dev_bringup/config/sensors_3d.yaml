@@ -1,0 +1,16 @@
+# MoveIt occupancy-map input for the dev bringup: ar_bridge's scan cloud (already in base_link).
+# The updater casts rays from the cloud frame's origin, but drops every voxel a point occupies
+# from the free set first, so one complete cloud can't erase its own obstacles; a later PARTIAL
+# cloud would clear earlier obstacles along its rays — the app always uploads the whole scan.
+# Points inside the robot's collision geometry (at its current TF pose, + padding) are removed.
+sensors:
+  - static_scan
+static_scan:
+  sensor_plugin: occupancy_map_monitor/PointCloudOctomapUpdater
+  point_cloud_topic: /mrros/static_cloud
+  max_range: 5.0
+  point_subsample: 1
+  padding_offset: 0.03
+  padding_scale: 1.0
+  max_update_rate: 1.0
+  filtered_cloud_topic: /mrros/static_cloud_filtered

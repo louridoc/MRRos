@@ -324,3 +324,32 @@ Device drill:
 
 Core save → relaunch → restore flow device-confirmed ("Works!", 2026-11-17); the edge cases
 above (unrelated-area restore, Forget across relaunch, post-restore scan) not explicitly checked.
+
+## M5a — Planning-scene research spike
+Write-up: `docs/research/m5a-scene-ingestion.md` (verified vs documentation-only claims marked).
+
+Automated end-to-end check (run on the Mac, both vendors): `tools/moveit_scene_check.py` uploads a
+wall + points sampled on the robot's own collision meshes through ar_bridge's HTTP endpoint and
+asserts: blocked pose becomes invalid, start stays valid (self-filter), goal clear, OMPL plan found,
+every waypoint collision-free.
+- [x] UR10e — 2/2 runs pass (2026-11-18)
+- [x] CRX-30iA (`positions:="0,0.7,0,0,0,0"`) — 3/3 runs pass (2026-11-18)
+
+Findings log:
+- 2026-11-18: `move_group` invisible to every other node. Ruled out RMW mismatch (all CycloneDDS),
+  launch context, and UDP message size (CYCLONEDDS_URI tried, reverted). Cyclone tracing showed
+  others discovered move_group but it discovered no one → incoming traffic blocked → macOS
+  application firewall had no rule for the new binary. User allowed it; fixed.
+- 2026-11-18: octomap updater plugin missing — RoboStack's `moveit` doesn't pull in
+  `moveit_ros_perception`; installed and added to the env template.
+- 2026-11-18: CRX plans failed three different ways, none of them MoveIt bugs: my test wall's
+  inner corridor (0.35 m) was swept by the CRX's offset shoulder housing (→ 0.5 m); Ruckig
+  smoothing failed under FANUC's 0.4 rad/s² limits (dropped for planning-only); FANUC's OMPL
+  config is keyed to group `arm` vs SRDF group `manipulator`, so its collision-check resolution
+  never applied and OMPL accepted a path grazing the wall (set on the real group, 0.005).
+- 2026-11-18: an early version of the check sampled "robot" points on straight lines between link
+  frame origins — those aren't on a UR's arm, so they weren't (correctly) filtered. Now sampled on
+  the actual collision meshes from `/robot_description`.
+- 2026-11-18: a MoveIt started after an upload never sees it; a cloud arriving in move_group's
+  first seconds isn't self-filtered (silently). Drives the M5c "clear-then-publish, repeatedly"
+  design.

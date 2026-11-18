@@ -1,0 +1,3 @@
+# Planning-only dev setup: a controller manager with no controllers, so MoveIt plans but never
+# executes. (`controller_names: []` would be cleaner but launch rejects empty-list parameters.)
+moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager

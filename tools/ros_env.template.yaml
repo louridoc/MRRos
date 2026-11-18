@@ -13,7 +13,13 @@ dependencies:
   - ros-{{DISTRO}}-joint-state-publisher-gui
   - ros-{{DISTRO}}-xacro
   - ros-{{DISTRO}}-sensor-msgs-py
-  # MoveIt is added in M5 with: tools/ros-env.sh add <distro> moveit
+  # M5: MoveIt (move_group, octomap perception, OMPL) + per-vendor configs. fanuc_moveit_config is
+  # built from source (tools/external.repos.tsv) and needs moveit-ros-control-interface to build.
+  - ros-{{DISTRO}}-moveit
+  - ros-{{DISTRO}}-moveit-ros-perception    # octomap updaters — NOT pulled in by -moveit on RoboStack
+  - ros-{{DISTRO}}-ur-moveit-config
+  - ros-{{DISTRO}}-moveit-ros-control-interface
+  - ros-{{DISTRO}}-moveit-simple-controller-manager
   - colcon-common-extensions
   - rosdep
   - compilers
