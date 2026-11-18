@@ -95,14 +95,25 @@ struct PlacementBar: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Text(scene
-                .isAligning ?
-                "Drag to move, twist with two fingers to turn — Done when it overlays the real robot." : scene
-                .status)
-                .font(.caption)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+            Text(
+                scene.isAligning
+                    ? "Pick an axis below, then drag anywhere — Done when it overlays the real robot."
+                    : scene.status
+            )
+            .font(.caption)
+            .lineLimit(2)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.secondary)
+
+            if scene.isAligning {
+                Picker("Axis", selection: $scene.alignAxis) {
+                    ForEach(RobotScene.AlignAxis.allCases) { axis in
+                        Text(axis.rawValue).tag(axis)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
             HStack(spacing: 12) {
                 Button {
                     scene.request = .place

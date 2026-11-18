@@ -42,6 +42,18 @@ public struct AlignmentTransform: Sendable, Equatable {
         AlignmentTransform(position: position + delta, yaw: yaw)
     }
 
+    /// Moves by `(x, z)` expressed in the alignment's OWN local frame (rotated by the current
+    /// `yaw`), not AR world axes — so "move along local X" means the same physical direction
+    /// regardless of how the robot is currently rotated, the way dragging a block by its own
+    /// axis handles does in a typical AR placement UI. Used by the axis-constrained gizmo: the
+    /// user picks an axis button, then a single plain screen-space drag (not a 3D floor
+    /// raycast — see the M4 testing notes on why raycasting the touch point was unreliable)
+    /// moves along just that axis.
+    public func translatedLocally(byX dx: Float = 0, byZ dz: Float = 0) -> AlignmentTransform {
+        let worldDelta = simd_quatf(angle: yaw, axis: SIMD3(0, 1, 0)).act(SIMD3(dx, 0, dz))
+        return translated(by: worldDelta)
+    }
+
     /// A rotate gesture's delta, in radians about `+Y`.
     public func rotated(byYaw delta: Float) -> AlignmentTransform {
         AlignmentTransform(position: position, yaw: yaw + delta)

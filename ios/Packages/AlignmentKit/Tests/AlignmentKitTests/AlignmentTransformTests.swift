@@ -47,6 +47,26 @@ struct AlignmentTransformTests {
         #expect(abs(rotated.yaw - 0.7) < 1e-6)
     }
 
+    @Test func translatedLocallyAtZeroYawMatchesWorldAxes() {
+        let a = AlignmentTransform(position: SIMD3(1, 0, 2), yaw: 0)
+        let moved = a.translatedLocally(byX: 0.5, byZ: -0.3)
+        #expect(close(moved.position, SIMD3(1.5, 0, 1.7)))
+    }
+
+    @Test func translatedLocallyRotatesTheDeltaWithCurrentYaw() {
+        // At yaw = 90°, "local X" should point along whatever world axis local +X rotates to —
+        // moving purely along local X should land somewhere other than the naive world-X offset.
+        let a = AlignmentTransform(position: .zero, yaw: .pi / 2)
+        let moved = a.translatedLocally(byX: 1)
+        #expect(abs(moved.position.x) < 1e-5) // did NOT move along world X
+        #expect(simd_length(moved.position) - 1 < 1e-5) // moved exactly 1m, just a different direction
+    }
+
+    @Test func translatedLocallyWithNoArgumentsIsANoOp() {
+        let a = AlignmentTransform(position: SIMD3(1, 2, 3), yaw: 0.4)
+        #expect(a.translatedLocally() == a)
+    }
+
     @Test func pointInBaseLinkRoundTripsThroughTheForwardTransform() {
         let a = AlignmentTransform(position: SIMD3(0.5, 0.1, -0.3), yaw: 1.234)
         let p = SIMD3<Float>(2, 0.5, -1)

@@ -15,11 +15,23 @@ final class RobotScene {
     var request: Request?
     var isPlaced = false
     var isBuilding = false
-    /// Toggled directly by the UI (a mode, not a one-shot request): while true, drag/rotate
-    /// gestures on the AR view nudge the placed robot's alignment, and it renders translucent
-    /// so it's visually obvious you're comparing against the camera passthrough, not just
-    /// looking at an opaque model. See M4 in docs/PLAN.md.
+    /// Toggled directly by the UI (a mode, not a one-shot request): while true, a single drag
+    /// gesture on the AR view nudges the placed robot's alignment along whichever axis
+    /// `alignAxis` currently selects. See M4 in docs/PLAN.md.
     var isAligning = false
+
+    enum AlignAxis: String, CaseIterable, Identifiable {
+        case x = "X", z = "Z", yaw = "Rotate"
+        var id: String {
+            rawValue
+        }
+    }
+
+    /// Which degree of freedom the alignment drag currently moves — axis-select-then-drag,
+    /// not a free 2D/3D gesture. Chosen deliberately after a free-drag gizmo (raycasting the
+    /// floor under the touch) proved unreliable in practice: see the M4 findings in
+    /// docs/testing.md for the full story.
+    var alignAxis: AlignAxis = .x
     var status = "Connect and receive a robot description, then place it."
     var placeholders: [String] = []
     var placedRobotName: String?

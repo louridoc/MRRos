@@ -157,7 +157,9 @@ Findings log:
   fix proactively to the Python decoder (`ply.py`) and locked it in with a named regression test.
 
 ## M4 — Alignment (in progress)
-Scope decided with the user: drag-to-translate + two-finger-rotate gizmo (not nudge buttons);
+Scope decided with the user: initially a free drag-to-translate + two-finger-rotate gizmo (not
+nudge buttons) — revised after device testing to axis-select-then-drag (see "fourth attempt"
+below), on the user's advice from a prior AR app where free dragging had the same problems.
 `ARWorldMap` save/restore deferred to a follow-up (M4b) after this pass is device-verified.
 
 Automated: `tools/ios-test.sh AlignmentKit` — `AlignmentTransform` property tests (identity is a
@@ -179,13 +181,9 @@ Built this pass:
   points; both the ROS-axis rotation and the alignment registration happen together at upload
   time, recomputed from whatever the CURRENT alignment is — re-aligning doesn't require
   re-scanning.
-- Gizmo gestures on `ARContainerView`: single-finger pan re-raycasts the floor under the touch
-  point (same raycast `place()` uses) to translate; two-finger rotation adjusts yaw. Both are
-  no-ops unless `RobotScene.isAligning` is on (an explicit "Align" button, not always-live, to
-  avoid accidental nudges during normal viewing).
-- Overlay check view: while aligning, the robot renders at 40% opacity (`OpacityComponent`) so
-  it's visually obvious you're comparing against the camera passthrough, not just looking at an
-  opaque model; reverts to opaque on "Done".
+- Gizmo gestures on `ARContainerView` (superseded — see "fourth attempt" below for the current
+  design): originally single-finger pan re-raycasting the floor under the touch point to
+  translate, two-finger rotation for yaw, and a translucent "ghost" render while aligning.
 
 Device drill, first attempt (2026-11-17): three real problems, all fixed same session, not yet
 re-verified on device:
@@ -229,12 +227,30 @@ occlusion mesh can clip through/hide a translucent model in ways it never could 
 opaque one, which would visually read as "sinking into the floor" with no actual transform
 change. Fix: dropped the opacity ghost entirely (robot stays fully opaque throughout; the gizmo
 disc/arrow is what signals align mode now) and disable scene occlusion while aligning so the
-real-world mesh can't compete with the model you're actively moving. **Not yet re-verified on
-device — this is a diagnosis from reading the code, not a confirmed root cause.**
+real-world mesh can't compete with the model you're actively moving.
+
+Device drill, fourth attempt (2026-11-17): occlusion fix was an improvement but the user judged
+the whole free-drag interaction a bad idea on its own merits (also reported the robot looked
+smaller, cause not diagnosed — moot once the mechanism below was replaced wholesale). Per the
+user's own prior AR app (`~/xcode_ws/MCRL-AR-Swift-App`), which hit the same free-drag
+unreliability and solved it with axis-select-then-drag, ported that pattern directly:
+- `RobotScene.AlignAxis` (`.x`, `.z`, `.yaw`) + a segmented control, shown only while aligning.
+- `AlignmentTransform.translatedLocally(byX:byZ:)` — moves along the alignment's OWN local axes
+  (rotated by current yaw), matching the reference app's `localTranslate`.
+- A single `UIPanGestureRecognizer`; `handlePan` reads only `translation(in:).x` (screen points,
+  not any 3D raycast or ray/plane intersection — no ARKit geometry query of any kind) and routes
+  it to whichever axis is selected, scaled by a constant (`1/1000` m/point for translation,
+  `1/100` rad/point for yaw — taken from the reference app's already-tuned feel) and consumes
+  the delta via `setTranslation(.zero, in:)` each event, mirroring the reference app's
+  `sender.setTranslation(CGPoint.zero, ...)`. No floor raycasting, no occlusion interaction, no
+  shallow-angle amplification — the entire class of bugs from the first three attempts doesn't
+  apply to this design since no 3D geometry query is involved in the drag at all.
+Dropped the two-finger rotation gesture and the free-translate pan entirely. Not yet
+re-verified on device.
 
 Device drill, not yet (re-)done:
-- [ ] Virtual robot overlays the real one after dragging/rotating with the gizmo
+- [ ] Virtual robot overlays the real one using the X/Z/Rotate axis-select drag
 - [ ] A cloud of a box placed at a measured offset appears at that offset in RViz (quantitative
       check — validates the gizmo's resulting transform and the registration path together)
-- [ ] Gesture feel on a real phone (pan precision, rotation sign/direction, whether the new
-      ray-plane pan feels responsive)
+- [ ] Gesture feel on a real phone (are the 1/1000 m/point and 1/100 rad/point scale factors
+      reasonable, or need tuning for this robot/screen size)

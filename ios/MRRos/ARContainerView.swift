@@ -34,19 +34,15 @@ struct ARContainerView: UIViewRepresentable {
         view.session.run(config)
         context.coordinator.attach(view)
 
-        // Alignment gizmo: single-finger pan re-raycasts the floor under the touch point (same
-        // raycast `place()` uses); two-finger rotation adjusts yaw. Both are no-ops unless
-        // `scene.isAligning` is on — see `handlePan`/`handleRotation` — so they don't interfere
-        // with normal AR viewing.
+        // Alignment gizmo: a single plain pan drag, whose horizontal screen delta moves the
+        // robot along whichever axis `scene.alignAxis` currently selects (X / Z / yaw) — not a
+        // free 2D/3D gesture. A no-op unless `scene.isAligning` is on — see `handlePan` — so it
+        // doesn't interfere with normal AR viewing.
         let pan = UIPanGestureRecognizer(
             target: context.coordinator,
             action: #selector(Coordinator.handlePan)
         )
-        let rotation = UIRotationGestureRecognizer(
-            target: context.coordinator, action: #selector(Coordinator.handleRotation)
-        )
         view.addGestureRecognizer(pan)
-        view.addGestureRecognizer(rotation)
 
         return view
     }
@@ -79,10 +75,6 @@ struct ARContainerView: UIViewRepresentable {
         /// against this, recomputed fresh at upload time (see `uploadScan`).
         private var alignment: AlignmentTransform?
         private var wasAligning = false
-        /// Captured on `.began` so `handlePan` can move the robot by how far the touch has
-        /// moved since then (a delta), rather than snapping it to the touch's absolute
-        /// floor-projection every event — see `handlePan`.
-        private var panStart: (touchPoint: SIMD3<Float>, alignmentPosition: SIMD3<Float>)?
         private var robot: RobotEntity?
         private var mapper: JointStateMapper?
         private var smoother = JointSmoother(tau: 0.06)
@@ -191,7 +183,6 @@ struct ARContainerView: UIViewRepresentable {
             anchor = nil
             gizmo = nil
             alignment = nil
-            panStart = nil
             robot = nil
             mapper = nil
             scene.isPlaced = false
@@ -225,79 +216,40 @@ struct ARContainerView: UIViewRepresentable {
             return root
         }
 
-        /// Called every `updateUIView`; reacts to `scene.isAligning` flipping (show the gizmo,
-        /// disable scene occlusion) rather than a one-shot request, since this is a persistent
-        /// mode. The robot stays fully opaque throughout — an earlier attempt made it
-        /// translucent to signal align mode, but alpha-blended geometry doesn't write depth the
-        /// way opaque geometry does, so it lost the fight against the real-world occlusion mesh
-        /// and visually appeared to sink into the floor on every touch, even though its actual
-        /// transform never changed (the pan math below can't move Y at all — the ray/plane
-        /// intersection is solved to land exactly on the robot's current height by construction).
-        /// The gizmo disc/arrow is what signals align mode now, not the model's appearance.
+        /// Called every `updateUIView`; reacts to `scene.isAligning` flipping (show the gizmo)
+        /// rather than a one-shot request, since this is a persistent mode.
         func syncAligningState() {
             guard scene.isAligning != wasAligning else { return }
             wasAligning = scene.isAligning
             gizmo?.isEnabled = scene.isAligning
-            arView?.environment.sceneUnderstanding.options = scene.isAligning ? [] : [.occlusion]
         }
 
+        /// Axis-select-then-drag, not a free 2D/3D gesture: `scene.alignAxis` (set by UI
+        /// buttons) picks X / Z / yaw, and a single plain screen-space pan delta moves along
+        /// just that axis — `translation.x` scaled by a constant, the same regardless of which
+        /// axis is selected. No raycasting of any kind is involved, which is deliberate: an
+        /// earlier version raycast the floor under the touch point to drive a free 2D drag, and
+        /// that was unreliable in practice (see the M4 findings in docs/testing.md) — shallow
+        /// viewing angles amplified small finger movements into large jumps, and depended on
+        /// ARKit's plane estimation being accurate exactly where the user was touching.
         @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
-            guard scene.isAligning, let arView, let alignment else { return }
+            guard scene.isAligning, let arView, recognizer.state == .began || recognizer.state == .changed
+            else { return }
+            let dx = Float(recognizer.translation(in: arView).x)
+            recognizer.setTranslation(.zero, in: arView) // consume it — this is a delta, not a total
 
-            switch recognizer.state {
-            case .began:
-                guard let p = Self.intersection(
-                    ofRayThrough: recognizer.location(in: arView), in: arView, atHeight: alignment.position.y
-                ) else { return }
-                panStart = (touchPoint: p, alignmentPosition: alignment.position)
-
-            case .changed:
-                guard let panStart,
-                      let p = Self.intersection(
-                          ofRayThrough: recognizer.location(in: arView), in: arView,
-                          atHeight: alignment.position.y
-                      )
-                else { return }
-                // Move by how far the touch's floor-projection has moved since `.began`, not to
-                // the touch's absolute projection — the latter snaps the robot to wherever your
-                // finger happens to be and amplifies wildly at shallow viewing angles.
-                self.alignment?.position = panStart.alignmentPosition + (p - panStart.touchPoint)
-                applyAlignmentToAnchor()
-
-            case .ended, .cancelled, .failed:
-                panStart = nil
-
-            default:
-                break
+            switch scene.alignAxis {
+            case .x: alignment = alignment?.translatedLocally(byX: dx * Self.panMetersPerPoint)
+            case .z: alignment = alignment?.translatedLocally(byZ: dx * Self.panMetersPerPoint)
+            case .yaw: alignment = alignment?.rotated(byYaw: dx * Self.panRadiansPerPoint)
             }
-        }
-
-        /// Where the camera ray through `point` crosses the horizontal plane `y = height`, in AR
-        /// world space. Deliberately NOT `arView.raycast(..., allowing: .estimatedPlane, ...)`:
-        /// that can return a hit on a different/spurious plane (e.g. LiDAR mesh noise just under
-        /// the true floor), which was dropping the robot below the floor on every touch. Pure
-        /// ray/plane math against the robot's own current height has no such failure mode.
-        private static func intersection(
-            ofRayThrough point: CGPoint,
-            in arView: ARView,
-            atHeight height: Float
-        )
-            -> SIMD3<Float>?
-        {
-            guard let ray = arView.ray(through: point), abs(ray.direction.y) > 1e-5 else { return nil }
-            let t = (height - ray.origin.y) / ray.direction.y
-            guard t > 0 else { return nil } // plane behind the camera
-            return ray.origin + ray.direction * t
-        }
-
-        @objc func handleRotation(_ recognizer: UIRotationGestureRecognizer) {
-            guard scene.isAligning, anchor != nil, recognizer.state == .changed else { return }
-            // UIKit's rotation gesture reports clockwise-positive in screen space; negate so it
-            // matches AR's right-handed +Y-up yaw convention (counter-clockwise from above).
-            alignment = alignment?.rotated(byYaw: Float(-recognizer.rotation))
-            recognizer.rotation = 0
             applyAlignmentToAnchor()
         }
+
+        // Tuned to feel like the reference app's block-alignment drag (same order of magnitude):
+        // ~1000 screen points of drag per metre of translation, ~100 points per radian of yaw.
+        private static let panMetersPerPoint: Float = 1 / 1000
+        private static let panRadiansPerPoint: Float = 1 / 100
 
         private func applyAlignmentToAnchor() {
             guard let anchor, let alignment else { return }
