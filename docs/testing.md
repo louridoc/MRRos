@@ -245,8 +245,22 @@ unreliability and solved it with axis-select-then-drag, ported that pattern dire
   `sender.setTranslation(CGPoint.zero, ...)`. No floor raycasting, no occlusion interaction, no
   shallow-angle amplification — the entire class of bugs from the first three attempts doesn't
   apply to this design since no 3D geometry query is involved in the drag at all.
-Dropped the two-finger rotation gesture and the free-translate pan entirely. Not yet
-re-verified on device.
+Dropped the two-finger rotation gesture and the free-translate pan entirely.
+
+Device drill, fifth attempt (2026-11-17): the axis-select redesign made NO difference — robot
+still snapped below the floor the instant a drag started, even though the new pan math only
+ever touches X/Z/yaw and provably can't move Y. That ruled out the pan math itself across two
+completely different implementations, which pointed at something underneath both of them:
+every attempt so far mutated `AnchorEntity.transform` directly to move the robot.
+`AnchorEntity` represents a point ARKit tracks, and there was never a confirmed guarantee that
+manually overwriting its `.transform` doesn't get fought or partially overridden by RealityKit's
+own anchor bookkeeping — which would explain a symptom that survived three independent fixes to
+the gesture-handling code above it. Restructured so `anchor` is created once at the identity
+transform and never touched again; a new plain child `Entity` (`alignmentRoot`) holds the robot
+and gizmo, and its LOCAL transform (== world transform, since `anchor` is identity) is what
+`alignment.transform` now drives. A plain `Entity`'s transform has no anchor-tracking behavior
+to fight with. Not yet re-verified on device — if this still doesn't fix it, the "fighting with
+AnchorEntity" theory is wrong and the bug is somewhere not yet identified.
 
 Device drill, not yet (re-)done:
 - [ ] Virtual robot overlays the real one using the X/Z/Rotate axis-select drag

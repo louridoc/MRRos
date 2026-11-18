@@ -65,9 +65,20 @@ struct ARContainerView: UIViewRepresentable {
         private let scene: RobotScene
         private let scanScene: ScanScene
         private weak var arView: ARView?
+        /// Fixed at the AR world origin for the entity's whole lifetime and never touched again
+        /// after creation — `AnchorEntity` represents a point ARKit tracks, and mutating its
+        /// `.transform` to drag the robot turned out to fight (or at least raised real doubt
+        /// about fighting) with RealityKit's own anchor bookkeeping, which is what the repeated
+        /// "snaps below the floor" reports traced back to. `alignmentRoot` is a plain child
+        /// `Entity` instead — nothing about a plain entity's transform is special, so there's
+        /// nothing for it to fight with.
         private var anchor: AnchorEntity?
-        /// Visual gizmo (disc + heading arrow) shown at the anchor while aligning, so there's
-        /// something on screen to look at besides the robot itself — a child of `anchor`, so it
+        /// Child of `anchor`; its LOCAL transform (== world transform, since `anchor` sits at
+        /// identity) is `alignment.transform` — this is the thing the gizmo actually moves.
+        /// Holds the robot and the gizmo decoration as ITS children.
+        private var alignmentRoot: Entity?
+        /// Visual gizmo (disc + heading arrow) shown while aligning, so there's something on
+        /// screen to look at besides the robot itself — a child of `alignmentRoot`, so it
         /// tracks position/yaw automatically.
         private var gizmo: Entity?
         /// Where `base_link` is in AR world space — seeded from the placement raycast, then
@@ -145,14 +156,22 @@ struct ARContainerView: UIViewRepresentable {
                 guard let self else { return }
                 let entity = await RobotEntity(robot: urdf, meshes: meshes)
                 guard !Task.isCancelled, let arView = self.arView else { return }
-                let anchor = AnchorEntity(world: hit.worldTransform)
-                anchor.addChild(entity.root)
+
+                let anchor = AnchorEntity(world: matrix_identity_float4x4)
+                let root = Entity()
                 let gizmo = Self.makeGizmo()
-                anchor.addChild(gizmo)
+                root.addChild(entity.root)
+                root.addChild(gizmo)
+                anchor.addChild(root)
                 arView.scene.addAnchor(anchor)
+
+                let seeded = AlignmentTransform.from(worldTransform: hit.worldTransform)
+                root.transform = Transform(matrix: seeded.transform)
+
                 self.anchor = anchor
+                alignmentRoot = root
                 self.gizmo = gizmo
-                alignment = AlignmentTransform.from(worldTransform: hit.worldTransform)
+                alignment = seeded
                 robot = entity
                 mapper = JointStateMapper(robot: urdf)
                 smoother = JointSmoother(
@@ -181,6 +200,7 @@ struct ARContainerView: UIViewRepresentable {
                 arView?.scene.removeAnchor(anchor)
             }
             anchor = nil
+            alignmentRoot = nil
             gizmo = nil
             alignment = nil
             robot = nil
@@ -252,8 +272,8 @@ struct ARContainerView: UIViewRepresentable {
         private static let panRadiansPerPoint: Float = 1 / 100
 
         private func applyAlignmentToAnchor() {
-            guard let anchor, let alignment else { return }
-            anchor.transform = Transform(matrix: alignment.transform)
+            guard let alignmentRoot, let alignment else { return }
+            alignmentRoot.transform = Transform(matrix: alignment.transform)
         }
 
         // MARK: Scanning
