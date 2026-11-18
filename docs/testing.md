@@ -283,8 +283,7 @@ Sixth pass (2026-11-17, user request): move relative to `base_link` with a visib
   the full position, so raising the base raises the cloud's `base_link` origin with it.
 
 Device drill, not yet (re-)done:
-- [ ] Virtual robot overlays the real one using the X/Y/Z/Rotate Z axis-select drag
+- [x] Virtual robot overlays the real one using the X/Y/Z/Rotate Z axis-select drag (2026-11-17)
 - [ ] A cloud of a box placed at a measured offset appears at that offset in RViz (quantitative
       check — validates the gizmo's resulting transform and the registration path together)
-- [ ] Gesture feel on a real phone (are the 1/1000 m/point and 1/100 rad/point scale factors
-      reasonable — now only the yaw scale and the foreshortened-axis fallback use them)
+- [x] Gesture feel on a real phone — "works great" (2026-11-17)
