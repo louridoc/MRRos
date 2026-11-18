@@ -226,14 +226,19 @@ struct ARContainerView: UIViewRepresentable {
         }
 
         /// Called every `updateUIView`; reacts to `scene.isAligning` flipping (show the gizmo,
-        /// lightly dim the robot) rather than a one-shot request, since this is a persistent mode.
+        /// disable scene occlusion) rather than a one-shot request, since this is a persistent
+        /// mode. The robot stays fully opaque throughout — an earlier attempt made it
+        /// translucent to signal align mode, but alpha-blended geometry doesn't write depth the
+        /// way opaque geometry does, so it lost the fight against the real-world occlusion mesh
+        /// and visually appeared to sink into the floor on every touch, even though its actual
+        /// transform never changed (the pan math below can't move Y at all — the ray/plane
+        /// intersection is solved to land exactly on the robot's current height by construction).
+        /// The gizmo disc/arrow is what signals align mode now, not the model's appearance.
         func syncAligningState() {
             guard scene.isAligning != wasAligning else { return }
             wasAligning = scene.isAligning
             gizmo?.isEnabled = scene.isAligning
-            // Light dimming, not a heavy ghost — the user needs to clearly see the model to
-            // judge overlap against the real robot, not just a vague translucent blob.
-            robot?.root.components.set(OpacityComponent(opacity: scene.isAligning ? 0.75 : 1.0))
+            arView?.environment.sceneUnderstanding.options = scene.isAligning ? [] : [.occlusion]
         }
 
         @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {

@@ -214,7 +214,23 @@ projected point ("overshoots"). Fixed by switching to relative-delta dragging: `
 the touch's floor-projection and the alignment's starting position; `.changed` moves by the
 difference between the current and starting projections, added to the starting position — the
 standard pattern for dragging an object across a plane in AR, used by essentially every
-placement app. Not yet re-verified on device.
+placement app.
+
+Device drill, third attempt (2026-11-17): user reported the relative-delta fix made no
+difference — robot still "goes below the floor" the moment it's touched. The pan math is
+provably unable to move Y at all (the ray/plane intersection is solved so both the start and
+current touch projections land exactly on the robot's current height — their difference has a
+y-component of exactly 0 by construction), so this is very unlikely to be an actual position
+bug. Best diagnosis without being able to see the device: the OTHER change bundled into the
+previous fix — ghosting the robot via `OpacityComponent` while aligning — is the real culprit.
+Alpha-blended geometry typically doesn't write to the depth buffer the way opaque geometry does,
+so with `sceneUnderstanding.options = [.occlusion]` still enabled, the real-world LiDAR
+occlusion mesh can clip through/hide a translucent model in ways it never could against an
+opaque one, which would visually read as "sinking into the floor" with no actual transform
+change. Fix: dropped the opacity ghost entirely (robot stays fully opaque throughout; the gizmo
+disc/arrow is what signals align mode now) and disable scene occlusion while aligning so the
+real-world mesh can't compete with the model you're actively moving. **Not yet re-verified on
+device — this is a diagnosis from reading the code, not a confirmed root cause.**
 
 Device drill, not yet (re-)done:
 - [ ] Virtual robot overlays the real one after dragging/rotating with the gizmo
