@@ -29,6 +29,14 @@ class Handlers:
     get_mesh: Callable[[str], Awaitable[MeshResult]] | None = None
 
 
+def _error_response(e: Exception) -> web.Response:
+    # Duck-typed: any exception carrying `.status` (MeshResolverError, ply.PLYError) maps
+    # straight to that HTTP status; anything else is a genuine bug, so it surfaces as 500
+    # rather than being swallowed.
+    status = getattr(e, "status", 500)
+    return web.Response(status=status, text=str(e))
+
+
 def make_app(handlers: Handlers, *, node_name: str = "ar_bridge") -> web.Application:
     app = web.Application(client_max_size=256 * 1024 * 1024)
 
@@ -47,7 +55,10 @@ def make_app(handlers: Handlers, *, node_name: str = "ar_bridge") -> web.Applica
             raise web.HTTPNotImplemented(reason="cloud ingest arrives in M3")
         body = await request.read()
         meta = dict(request.query.items())
-        result = await handlers.on_cloud(body, meta)
+        try:
+            result = await handlers.on_cloud(body, meta)
+        except Exception as e:
+            return _error_response(e)
         return web.json_response(result)
 
     async def mesh(request: web.Request) -> web.Response:
@@ -59,11 +70,7 @@ def make_app(handlers: Handlers, *, node_name: str = "ar_bridge") -> web.Applica
         try:
             data, content_type, sha256 = await handlers.get_mesh(uri)
         except Exception as e:
-            # Duck-typed: any exception carrying `.status` (MeshResolverError) maps straight to
-            # that HTTP status; anything else is a genuine bug, so it surfaces as 500 rather than
-            # being swallowed.
-            status = getattr(e, "status", 500)
-            return web.Response(status=status, text=str(e))
+            return _error_response(e)
         return web.Response(body=data, content_type=content_type, headers={"X-Mesh-SHA256": sha256})
 
     app.add_routes(

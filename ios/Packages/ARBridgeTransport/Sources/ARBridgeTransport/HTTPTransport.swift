@@ -1,9 +1,10 @@
 import Foundation
 
-/// A raw HTTP GET, abstracted so tests can inject a scripted transport instead of hitting the
+/// Raw HTTP GET/POST, abstracted so tests can inject a scripted transport instead of hitting the
 /// network (same pattern as `ROSBridgeClient.WebSocketTransport`).
 public protocol HTTPTransport: Sendable {
     func get(_ url: URL) async throws -> HTTPResponse
+    func post(_ url: URL, body: Data) async throws -> HTTPResponse
 }
 
 public struct HTTPResponse: Sendable, Equatable {
@@ -34,8 +35,21 @@ public struct URLSessionHTTPTransport: HTTPTransport {
 
     public func get(_ url: URL) async throws -> HTTPResponse {
         let (data, response) = try await session.data(from: url)
+        return try respond(data: data, response: response)
+    }
+
+    public func post(_ url: URL, body: Data) async throws -> HTTPResponse {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await session.data(for: request)
+        return try respond(data: data, response: response)
+    }
+
+    private func respond(data: Data, response: URLResponse) throws -> HTTPResponse {
         guard let http = response as? HTTPURLResponse else {
-            throw ARBridgeError.transport("non-HTTP response from \(url)")
+            throw ARBridgeError.transport("non-HTTP response")
         }
         var headers: [String: String] = [:]
         for (key, value) in http.allHeaderFields {

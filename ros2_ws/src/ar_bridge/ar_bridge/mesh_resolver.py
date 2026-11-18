@@ -18,6 +18,7 @@ from pathlib import Path
 try:
     from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 except ImportError:  # pragma: no cover - only hit outside a sourced ROS env
+
     class PackageNotFoundError(Exception):
         pass
 

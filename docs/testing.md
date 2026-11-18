@@ -84,3 +84,36 @@ before any device check, same discipline as M2a:
       appeared correctly, fetched meshes loaded over the network (2026-11-17)
 
 M2b exit test met (2026-11-17), Mac-side and device.
+
+## M3 — Scan → RViz
+Automated: `tools/ios-test.sh LiDARScan AlignmentKit ARBridgeTransport` (PLY encode/decode
+round-trip incl. a regression test for the small-cloud ASCII-prefix bug below, voxel filter,
+`uploadCloud` query/body/status-mapping against a mocked transport), `cd ros2_ws && tools/ros.sh
+jazzy pytest -q` (`ply.py` decode/encode/merge incl. a fixture shaped like the Swift encoder's
+exact header, `cloud.py`'s `build_point_cloud2`/`write_pcd`/`ingest`, `/v0/cloud`'s error-status
+mapping in `http_api.py`).
+
+Mac-side end-to-end check (no phone), same discipline as M2b:
+- [x] `ros2 run ar_bridge ar_bridge` alone (no bringup needed for this endpoint) → hand-built
+      420-point colored PLY POSTed to `/v0/cloud?frame_id=map&name=m3test` via curl: `200` with
+      correct point count, `.pcd` file on disk with the right header/point count, topic
+      structurally correct via `ros2 topic echo` (5 fields incl. packed `rgb`, 20-byte aligned
+      `point_step`), and visually confirmed in a live RViz (floor + wall, correct colors) (2026-11-17)
+- [x] Second POST with `mode=append` and no confidence/color (tests the backfill path) →
+      420+10=430 points, confirmed via `ros2 topic echo` (2026-11-17)
+- [x] Real Swift-side client (`LiDARScan.PLYCodec.encode` → `ARBridgeTransport.ARBridgeClient.
+      uploadCloud` over real `URLSessionHTTPTransport`, not the mocked transport) against the
+      live node: 5000-point cloud uploaded and accepted (2026-11-17)
+- [x] Full app target builds (`tools/ios-build.sh`) with the capture/preview/upload UI
+      (`ScanScene`, `ScanSheet`, `ARContainerView.Coordinator.captureScan/clearScan/uploadScan`)
+
+Device drill: **not yet done.** Still open: on-device LiDAR capture (real `ARMeshAnchor` data,
+not just the server/transport path), the "1M-point upload < 5 s on Wi-Fi" timing, and visual
+confirmation that an on-device scan lands correctly in RViz relative to the real room.
+
+Findings log:
+- 2026-11-17: `PLYCodec.parseHeader` (Swift) originally located `end_header` by decoding
+  `data.prefix(4096)` as ASCII — fails whenever a small cloud's binary payload falls inside that
+  window and isn't valid ASCII. Caught by self-review before running any tests, not by a test
+  failure; fixed by searching for the literal `end_header\n` byte marker first. Applied the same
+  fix proactively to the Python decoder (`ply.py`) and locked it in with a named regression test.

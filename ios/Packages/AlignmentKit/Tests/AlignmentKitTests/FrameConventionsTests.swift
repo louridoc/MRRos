@@ -25,6 +25,13 @@ struct FrameConventionsTests {
         #expect(simd_almost_equal_elements(rt, matrix_identity_double4x4, 1e-12))
     }
 
+    @Test func floatPointConversionMatchesTheDoublePath() {
+        let arPoint = SIMD3<Float>(0.3, -1.2, 2.5)
+        let viaFloat = FrameConventions.toROS(point: arPoint)
+        let viaDouble = FrameConventions.toROS(point: SIMD3<Double>(arPoint))
+        #expect(simd_length(viaFloat - SIMD3<Float>(viaDouble)) < 1e-5)
+    }
+
     @Test func roundTripsPointsAndTransforms() {
         let p = SIMD3<Double>(0.3, -1.2, 2.5)
         #expect(close(FrameConventions.toROS(point: FrameConventions.toAR(point: p)), p))

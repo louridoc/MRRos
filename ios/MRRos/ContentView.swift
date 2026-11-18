@@ -6,15 +6,27 @@ import SwiftUI
 struct ContentView: View {
     @State private var session = ROSSession()
     @State private var scene = RobotScene()
+    @State private var scanScene = ScanScene()
     @State private var showConnection = false
+    @State private var showScan = false
 
     var body: some View {
         ZStack {
-            ARContainerView(session: session, scene: scene)
+            ARContainerView(session: session, scene: scene, scanScene: scanScene)
                 .ignoresSafeArea()
             VStack(spacing: 10) {
-                StatusStrip(session: session) { showConnection = true }
-                    .padding(.top, 8)
+                HStack {
+                    StatusStrip(session: session) { showConnection = true }
+                    Spacer()
+                    Button { showScan = true } label: {
+                        Image(systemName: "camera.metering.matrix")
+                            .padding(10)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Environment scan")
+                }
+                .padding(.top, 8)
                 Spacer()
                 if let js = session.jointState {
                     JointsPanel(
@@ -32,6 +44,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showConnection) {
             ConnectionSheet(session: session)
+        }
+        .sheet(isPresented: $showScan) {
+            ScanSheet(scanScene: scanScene)
         }
     }
 }
