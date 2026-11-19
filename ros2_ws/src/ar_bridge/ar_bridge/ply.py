@@ -34,6 +34,10 @@ class DecodedCloud:
     def count(self) -> int:
         return self.xyz.shape[0]
 
+    @staticmethod
+    def empty() -> "DecodedCloud":
+        return DecodedCloud(xyz=np.zeros((0, 3), dtype=np.float32), confidence=None, color=None)
+
 
 def merge(a: "DecodedCloud", b: "DecodedCloud") -> "DecodedCloud":
     """Concatenates `b` onto `a` (for `mode=append`). If only one side has confidence/color,

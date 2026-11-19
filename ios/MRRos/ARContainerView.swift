@@ -558,6 +558,21 @@ struct ARContainerView: UIViewRepresentable {
             scanScene.pointCount = 0
             scanScene.lastUploadSummary = nil
             scanScene.status = "Scan cleared. Move around, then capture again."
+            // A user Clear also empties the ROS side (ar_bridge publishes an empty cloud and
+            // clears MoveIt's octomap) — otherwise RViz/MoveIt keep the last upload until the
+            // next one. The restore path doesn't: it isn't the user asking to empty the scene.
+            guard resetReconstruction, let arBridgeURL = session.settings.arBridgeURL else { return }
+            let client = ARBridgeClient(baseURL: arBridgeURL)
+            uploadTask?.cancel()
+            uploadTask = Task { [weak self] in
+                do {
+                    try await client.clearCloud(name: "live_scan")
+                    self?.scanScene.status = "Scan cleared here and on ROS. Move around, then capture again."
+                } catch {
+                    self?.log.error("cloud clear failed: \(String(describing: error), privacy: .public)")
+                    self?.scanScene.status = "Scan cleared here; couldn't clear ROS side: \(error)"
+                }
+            }
         }
 
         private func uploadScan() {

@@ -33,6 +33,15 @@ Errors: `400` malformed PLY (bad magic/format/header, unsupported property order
 body) or missing/invalid `frame_id`/`mode`; `413` body over `client_max_size` (256 MiB, enforced
 by aiohttp before the handler runs).
 
+## DELETE /v0/cloud  (M5)
+The app's **Clear**. Query: `name` (optional — clears that accumulator; without it, all),
+`frame_id` (optional, for the empty message; default the node's `frame_id`).
+Drops the stored scan(s), clears MoveIt's octomap (if move_group is up) and publishes an **empty**
+latched cloud on the same topic, so RViz, MoveIt and late joiners all see the scene emptied. The
+`.pcd` files already on disk are kept.
+→ `200 {"cleared": "<name>|all", "topic": "/mrros/static_cloud", "moveit_octomap_cleared": bool}`
+Errors: `501` on an ar_bridge without this endpoint (the app reports "couldn't clear ROS side").
+
 ## GET /v0/mesh?uri=package://pkg/path.dae  (M2b)
 → `200` body = **Wavefront OBJ** bytes (`Content-Type: model/obj`), header `X-Mesh-SHA256` =
 sha256 of the *source* file (same convention as the bundled-mesh manifest's `sha256` field, so
@@ -61,3 +70,4 @@ when no manifest entry names the file explicitly.
 - v0 (2026-11-17): `/v0/cloud` implemented (`ply.py`, `cloud.py`, `node.py`'s `_on_cloud`) —
   `501` dropped from its error set now that it's wired; `mode=append`'s accumulation key and
   backfill semantics specified above once actually built, instead of left open in the draft.
+- v0 (2026-11-18): `DELETE /v0/cloud` added; uploads clear MoveIt's octomap first; cloud stamp 0.

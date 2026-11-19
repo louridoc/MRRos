@@ -21,7 +21,7 @@ from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import PointCloud2
 from std_srvs.srv import Empty
 
-from ar_bridge.cloud import ingest
+from ar_bridge.cloud import build_point_cloud2, ingest
 from ar_bridge.http_api import Handlers, MeshResult, make_app
 from ar_bridge.mesh_resolver import MeshCache, resolve_mesh
 from ar_bridge.ply import DecodedCloud, PLYError, decode, merge
@@ -58,7 +58,9 @@ class ARBridge(Node):
         self._clouds: dict[str, DecodedCloud] = {}
 
         # M3's on_cloud and M2b's get_mesh are both live.
-        self.handlers = Handlers(get_mesh=self._get_mesh, on_cloud=self._on_cloud)
+        self.handlers = Handlers(
+            get_mesh=self._get_mesh, on_cloud=self._on_cloud, on_clear=self._on_clear
+        )
         distro = os.environ.get("ROS_DISTRO", "?")
         self.get_logger().info(
             f"http on :{self.port}, frame_id={self.frame_id}, out={self.output_dir}, "
@@ -116,6 +118,30 @@ class ARBridge(Node):
             "points": result.point_count,
             "file": str(result.pcd_path),
             "topic": self.cloud_topic,
+        }
+
+    async def _on_clear(self, meta: dict[str, str]) -> dict:
+        """DELETE /v0/cloud: the app's Clear. Drops the stored scan(s), publishes an EMPTY latched
+        cloud so every subscriber (RViz, MoveIt, late joiners) sees the scene emptied rather
+        than keeping the last upload, and clears MoveIt's octomap. `?name=` clears one
+        accumulator; without it, all. The .pcd files on disk are kept as a record."""
+        name = meta.get("name")
+        if name:
+            self._clouds.pop(name, None)
+        else:
+            self._clouds.clear()
+        frame_id = meta.get("frame_id") or self.frame_id
+        empty = build_point_cloud2(DecodedCloud.empty(), frame_id=frame_id, stamp=Time())
+        cleared = await self._clear_moveit_octomap()
+        self.cloud_pub.publish(empty)
+        self.get_logger().info(
+            f"cleared {name or 'all clouds'} -> empty {self.cloud_topic}"
+            f"{' (MoveIt octomap cleared)' if cleared else ''}"
+        )
+        return {
+            "cleared": name or "all",
+            "topic": self.cloud_topic,
+            "moveit_octomap_cleared": cleared,
         }
 
     async def _clear_moveit_octomap(self, timeout_s: float = 2.0) -> bool:

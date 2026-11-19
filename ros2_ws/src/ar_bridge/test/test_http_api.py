@@ -97,3 +97,24 @@ async def test_mesh_handler_unstatused_exception_is_500():
     async with TestClient(TestServer(app)) as c:
         r = await c.get("/v0/mesh", params={"uri": "package://pkg/a.obj"})
         assert r.status == 500
+
+
+async def test_clear_cloud_handler_receives_query_and_returns_result():
+    seen = {}
+
+    async def on_clear(meta: dict[str, str]) -> dict:
+        seen["meta"] = meta
+        return {"cleared": "live_scan", "moveit_octomap_cleared": True}
+
+    app = make_app(Handlers(on_clear=on_clear))
+    async with TestClient(TestServer(app)) as c:
+        r = await c.delete("/v0/cloud", params={"name": "live_scan"})
+        assert r.status == 200
+        assert (await r.json())["cleared"] == "live_scan"
+    assert seen == {"meta": {"name": "live_scan"}}
+
+
+async def test_clear_cloud_unwired_is_501():
+    app = make_app(Handlers())
+    async with TestClient(TestServer(app)) as c:
+        assert (await c.delete("/v0/cloud")).status == 501

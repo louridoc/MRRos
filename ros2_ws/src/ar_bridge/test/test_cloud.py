@@ -67,3 +67,10 @@ def test_ingest_writes_pcd_and_returns_matching_result(tmp_path):
     assert result.pcd_path == tmp_path / "myscan.pcd"
     assert result.pcd_path.exists()
     assert result.message.header.frame_id == "base_link"
+
+
+def test_build_point_cloud2_of_an_empty_cloud_is_a_valid_empty_message():
+    msg = cloud.build_point_cloud2(DecodedCloud.empty(), frame_id="base_link", stamp=Time())
+    assert msg.width == 0
+    assert len(msg.data) == 0
+    assert [f.name for f in msg.fields] == ["x", "y", "z"]

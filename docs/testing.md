@@ -392,3 +392,11 @@ Findings log:
 - 2026-11-18: OMPL occasionally accepted UR paths grazing the wall (state 9/25 rejected by
   ValidateSolution) at MoveIt's default 0.5% collision-check step (~0.15 rad on ±360° joints).
   Now 0.2% for every robot: 6/6 UR10e + 6/6 CRX-30iA --execute runs pass, planning ≤ 0.12 s.
+- 2026-11-18 (device test, follow-up): user saw RViz still showing old points after pressing
+  Clear. Measured MoveIt's octomap (decoded the octree from /get_planning_scene): it held exactly
+  the last upload — uploads were replacing correctly. The gap was Clear itself: it only reset the
+  phone, sending nothing to ROS, so RViz kept the last upload until the next one. Added
+  `DELETE /v0/cloud` (drops stored scan, clears MoveIt's octomap, publishes an empty latched cloud)
+  and the app's Clear calls it. Verified live: blocked pose free again, latched topic width 0, and
+  MoveIt's /monitored_planning_scene broadcast (what RViz draws) goes from a 283 KB octomap to empty.
+- [ ] Device: press Clear in the app → RViz's octomap empties without uploading
