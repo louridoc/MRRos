@@ -35,7 +35,7 @@ struct ContentView: View {
             VStack(spacing: 8) {
                 HStack(spacing: 8) {
                     StatusStrip(session: session) { showConnection = true }
-                    if session.jointState != nil {
+                    if session.isReceivingJoints {
                         Button {
                             showJoints.toggle()
                         } label: {
