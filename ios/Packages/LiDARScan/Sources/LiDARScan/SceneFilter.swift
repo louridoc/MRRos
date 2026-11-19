@@ -32,20 +32,29 @@ public enum PointClass: UInt8, Sendable, Equatable {
     case kept
     /// Inside a (padded) robot link box — the scan caught the real robot.
     case robot
+    /// Inside a user exclusion box ("drop whatever is in here").
+    case excluded
     /// Outside the user's crop box.
     case outsideCrop
 }
 
 public enum SceneFilter {
-    /// Robot wins over crop: a robot point inside the crop box is still `.robot`, so the preview
-    /// shows why it's excluded. `crop: nil` means no cropping.
+    /// Priority robot > excluded > outsideCrop, so the preview shows the most specific reason a
+    /// point is dropped. `crop: nil` means no cropping.
     public static func classify(
-        _ cloud: PointCloud, crop: OrientedBox?, robot: [OrientedBox], robotPadding: Float
+        _ cloud: PointCloud,
+        crop: OrientedBox?,
+        exclusions: [OrientedBox] = [],
+        robot: [OrientedBox],
+        robotPadding: Float
     ) -> [PointClass] {
         (0 ..< cloud.count).map { i in
             let p = cloud.point(at: i)
             if robot.contains(where: { $0.contains(p, padding: robotPadding) }) {
                 return .robot
+            }
+            if exclusions.contains(where: { $0.contains(p) }) {
+                return .excluded
             }
             if let crop, !crop.contains(p) {
                 return .outsideCrop

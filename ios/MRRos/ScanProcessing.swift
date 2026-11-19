@@ -90,6 +90,7 @@ struct PreviewGeometry: Sendable {
     let parts: [Part]
     let kept: Int
     let robot: Int
+    let excluded: Int
     let cropped: Int
 
     /// Drawing is capped per class — display only, the upload always uses every point.
@@ -97,9 +98,12 @@ struct PreviewGeometry: Sendable {
     private static let pointSize: Float = 0.008
 
     static func compute(
-        _ cloud: PointCloud, crop: OrientedBox?, robot: [OrientedBox], robotPadding: Float
+        _ cloud: PointCloud, crop: OrientedBox?, exclusions: [OrientedBox], robot: [OrientedBox],
+        robotPadding: Float
     ) -> PreviewGeometry {
-        let classes = SceneFilter.classify(cloud, crop: crop, robot: robot, robotPadding: robotPadding)
+        let classes = SceneFilter.classify(
+            cloud, crop: crop, exclusions: exclusions, robot: robot, robotPadding: robotPadding
+        )
         var byClass: [PointClass: [Int]] = [:]
         for (i, c) in classes.enumerated() {
             byClass[c, default: []].append(i)
@@ -108,7 +112,7 @@ struct PreviewGeometry: Sendable {
         // Small tetrahedron per point: visible from every angle with only 4 triangles.
         let corners: [SIMD3<Float>] = [SIMD3(s, s, s), SIMD3(-s, -s, s), SIMD3(-s, s, -s), SIMD3(s, -s, -s)]
         let faces: [UInt32] = [0, 1, 2, 0, 3, 1, 0, 2, 3, 1, 3, 2]
-        let parts: [Part] = [PointClass.kept, .robot, .outsideCrop].compactMap { cls in
+        let parts: [Part] = [PointClass.kept, .robot, .excluded, .outsideCrop].compactMap { cls in
             guard let idx = byClass[cls], !idx.isEmpty else { return nil }
             let stride = max(1, idx.count / maxDrawnPerClass)
             let drawn = Swift.stride(from: 0, to: idx.count, by: stride).map { idx[$0] }
@@ -131,6 +135,7 @@ struct PreviewGeometry: Sendable {
         return PreviewGeometry(
             classes: classes, parts: parts,
             kept: byClass[.kept]?.count ?? 0, robot: byClass[.robot]?.count ?? 0,
+            excluded: byClass[.excluded]?.count ?? 0,
             cropped: byClass[.outsideCrop]?.count ?? 0
         )
     }

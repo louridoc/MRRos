@@ -88,4 +88,27 @@ struct SceneFilterTests {
         #expect(kept.confidence == [10, 30])
         #expect(kept.color == [SIMD3(1, 1, 1), SIMD3(3, 3, 3)])
     }
+
+    @Test func exclusionBoxesDropWhatIsInsideThemWithRobotStillWinning() {
+        // 0: robot (also inside the exclusion) → robot. 1: inside exclusion → excluded.
+        // 2: outside crop (and not excluded) → outsideCrop. 3: inside crop, not excluded → kept.
+        let cloud = PointCloud(x: [0, 2, 50, 4], y: [0, 0, 0, 0], z: [0, 0, 0, 0])
+        let id = matrix_identity_float4x4
+        let robot = OrientedBox(boxFromWorld: id, min: SIMD3(-0.5, -0.5, -0.5), max: SIMD3(0.5, 0.5, 0.5))
+        let exclusion = OrientedBox(boxFromWorld: id, min: SIMD3(-0.6, -1, -1), max: SIMD3(2.5, 1, 1))
+        let crop = OrientedBox(boxFromWorld: id, min: SIMD3(-10, -10, -10), max: SIMD3(10, 10, 10))
+        let classes = SceneFilter.classify(
+            cloud, crop: crop, exclusions: [exclusion], robot: [robot], robotPadding: 0
+        )
+        #expect(classes == [.robot, .excluded, .outsideCrop, .kept])
+    }
+
+    @Test func severalExclusionBoxesEachApply() {
+        let cloud = PointCloud(x: [1, 5, 9], y: [0, 0, 0], z: [0, 0, 0])
+        let id = matrix_identity_float4x4
+        let a = OrientedBox(boxFromWorld: id, min: SIMD3(0.5, -1, -1), max: SIMD3(1.5, 1, 1))
+        let b = OrientedBox(boxFromWorld: id, min: SIMD3(8.5, -1, -1), max: SIMD3(9.5, 1, 1))
+        let classes = SceneFilter.classify(cloud, crop: nil, exclusions: [a, b], robot: [], robotPadding: 0)
+        #expect(classes == [.excluded, .kept, .excluded])
+    }
 }

@@ -10,6 +10,10 @@ final class ScanScene {
         case capture
         case clear
         case upload
+        /// New exclusion box where the screen centre hits a surface, then select it.
+        case addExclusion
+        /// Delete the selected exclusion box.
+        case deleteSelected
     }
 
     /// Set by the UI; consumed (reset to nil) by the AR coordinator.
@@ -23,28 +27,39 @@ final class ScanScene {
     var status = "Move around, then capture to add what the LiDAR has seen so far."
     var lastUploadSummary: String?
 
-    // MARK: Crop box (M5b) — a box in base_link; only points inside it are uploaded.
+    // MARK: Scan boxes (M5b) — all defined in base_link, so they move with the robot.
+    // One crop box (keep only what's inside) + any number of exclusion boxes (drop what's inside).
 
-    enum CropMode: String, CaseIterable, Identifiable {
-        case move = "Move", size = "Size"
+    enum BoxEditMode: String, CaseIterable, Identifiable {
+        case move = "Move", size = "Size", rotate = "Rotate"
         var id: String {
             rawValue
         }
     }
 
-    enum CropAxis: String, CaseIterable, Identifiable {
+    enum EditAxis: String, CaseIterable, Identifiable {
         case x = "X", y = "Y", z = "Z"
         var id: String {
             rawValue
         }
     }
 
+    enum EditTarget: Hashable {
+        case crop
+        case exclusion(Int)
+    }
+
     /// Crop applies (and is drawn) only while a robot is placed — it's defined in base_link.
     var cropEnabled = false
-    /// Drag edits the box (axis-select-then-drag, like alignment). Mutually exclusive with
-    /// `RobotScene.isAligning`; the UI enforces it.
-    var isEditingCrop = false
-    var cropMode: CropMode = .size
-    var cropAxis: CropAxis = .x
+    /// Drag edits the selected box (axis-select-then-drag, like alignment). Mutually exclusive
+    /// with `RobotScene.isAligning`; the UI enforces it.
+    var isEditingBoxes = false
+    var editTarget: EditTarget = .crop
+    /// Rotate is about the box's vertical axis, exclusion boxes only.
+    var editMode: BoxEditMode = .size
+    var editAxis: EditAxis = .x
+    /// Stable IDs of the exclusion boxes, in creation order (for the selector chips).
+    var exclusionIDs: [Int] = []
     var cropSummary: String?
+    var excludedCount = 0
 }

@@ -95,12 +95,17 @@ struct ARContainerView: UIViewRepresentable {
         private var alignment: AlignmentTransform?
         private var wasAligning = false
         private var highlightedAxis: RobotScene.AlignAxis?
-        /// Scan crop box in base_link (ROS axes, metres). Kept across re-placements; defaults to
-        /// a workspace around the base: ±0.8 m in X/Y, from 5 cm below the base to 1.4 m up.
-        private var cropCenter = SIMD3<Float>(0, 0, 0.675)
-        private var cropHalf = SIMD3<Float>(0.8, 0.8, 0.725)
-        private static let minCropHalf: Float = 0.05
-        private var cropVisual: CropBoxVisual?
+        /// Scan crop box in base_link. Kept across re-placements; defaults to a workspace around
+        /// the base: ±0.8 m in X/Y, from 5 cm below the base to 1.4 m up.
+        private var crop = BaseLinkBox(center: SIMD3(0, 0, 0.675), half: SIMD3(0.8, 0.8, 0.725))
+        /// Exclusion boxes in base_link, by stable ID (`scanScene.exclusionIDs` keeps the order).
+        /// Data survives re-placing the robot (visuals are rebuilt); a user Clear deletes them.
+        private var exclusions: [Int: BaseLinkBox] = [:]
+        private var nextExclusionID = 1
+        private static let minBoxHalf: Float = 0.025
+        private static let newExclusionHalf: Float = 0.15
+        private var cropVisual: BoxVisual?
+        private var exclusionVisuals: [Int: BoxVisual] = [:]
         private var wasCropEnabled = false
         /// `nil` only if Application Support is unavailable — saving/restoring then just reports so.
         private let alignmentStore = try? AlignmentStore.standard()
@@ -218,8 +223,8 @@ struct ARContainerView: UIViewRepresentable {
                 let anchor = AnchorEntity(world: matrix_identity_float4x4)
                 let root = Entity()
                 let gizmo = BaseLinkTriad()
-                let cropVisual = CropBoxVisual()
-                cropVisual.update(center: cropCenter, half: cropHalf)
+                let cropVisual = BoxVisual(color: .systemYellow, fillOpacity: 0.08)
+                cropVisual.update(crop)
                 cropVisual.root.isEnabled = scanScene.cropEnabled
                 root.addChild(entity.root)
                 root.addChild(gizmo.root)
@@ -232,6 +237,11 @@ struct ARContainerView: UIViewRepresentable {
                 alignmentRoot = root
                 self.gizmo = gizmo
                 self.cropVisual = cropVisual
+                exclusionVisuals = [:]
+                for (id, box) in exclusions {
+                    exclusionVisuals[id] = makeExclusionVisual(box, in: root)
+                }
+                refreshBoxSelection()
                 highlightedAxis = nil // fresh triad: let syncAligningState highlight it
                 alignment = seeded
                 robot = entity
@@ -267,6 +277,7 @@ struct ARContainerView: UIViewRepresentable {
             alignmentRoot = nil
             gizmo = nil
             cropVisual = nil
+            exclusionVisuals = [:]
             alignment = nil
             robot = nil
             mapper = nil
@@ -444,11 +455,11 @@ struct ARContainerView: UIViewRepresentable {
                 robot?.root.components.set(OpacityComponent(opacity: scene.isAligning ? 0.45 : 1))
                 arView?.environment.sceneUnderstanding.options = scene.isAligning ? [] : [.occlusion]
             }
-            // The triad also shows while editing the crop box — it's in base_link too, so the
-            // arrows are the box's axes; the highlighted arrow is whichever one the drag acts on.
-            gizmo?.root.isEnabled = scene.isAligning || scanScene.isEditingCrop
-            let wanted: RobotScene.AlignAxis = if scanScene.isEditingCrop {
-                switch scanScene.cropAxis {
+            // While editing a box the triad moves to that box's centre and turns with its yaw, so
+            // the arrows are exactly the axes a drag acts along; otherwise it marks the base.
+            gizmo?.root.isEnabled = scene.isAligning || scanScene.isEditingBoxes
+            let wanted: RobotScene.AlignAxis = if scanScene.isEditingBoxes {
+                switch scanScene.editAxis {
                 case .x: .x
                 case .y: .y
                 case .z: .z
@@ -466,6 +477,7 @@ struct ARContainerView: UIViewRepresentable {
                 updateCropSummary()
                 refreshPreview()
             }
+            refreshBoxSelection()
         }
 
         /// Axis-select-then-drag in `base_link` axes. For X/Y/Z the drag is measured ALONG the
@@ -474,8 +486,8 @@ struct ARContainerView: UIViewRepresentable {
         /// for why touch-point floor raycasts were abandoned.
         @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
             guard let arView, let alignment else { return }
-            if scanScene.isEditingCrop {
-                dragCrop(recognizer, in: arView, alignment: alignment)
+            if scanScene.isEditingBoxes {
+                dragBox(recognizer, in: arView, alignment: alignment)
                 return
             }
             guard scene.isAligning, recognizer.state == .began || recognizer.state == .changed
@@ -504,15 +516,14 @@ struct ARContainerView: UIViewRepresentable {
             applyAlignmentToAnchor()
         }
 
-        /// Crop editing: same axis-select-then-drag as alignment, along the chosen base_link axis
-        /// from the box's centre. Move shifts the box; Size grows/shrinks it symmetrically. The
-        /// scan is re-filtered when the finger lifts, not per event — re-classifying 50k+ points
-        /// and rebuilding the preview at 60 Hz would stutter.
-        private func dragCrop(_ recognizer: UIPanGestureRecognizer, in arView: ARView, alignment: AlignmentTransform) {
+        /// Box editing (crop or exclusion): same axis-select-then-drag as alignment, along the
+        /// selected box's OWN axes from its centre. Move shifts it, Size grows/shrinks it
+        /// symmetrically, Rotate (exclusion boxes) turns it about its vertical axis. The scan is
+        /// re-filtered when the finger lifts, not per event — re-classifying 50k+ points and
+        /// rebuilding the preview at 60 Hz would stutter.
+        private func dragBox(_ recognizer: UIPanGestureRecognizer, in arView: ARView, alignment: AlignmentTransform) {
             switch recognizer.state {
             case .ended, .cancelled:
-                // SwiftUI state and the re-filter only on lift — per-event updates re-render the
-                // bars and re-classify 50k+ points at 60 Hz.
                 updateCropSummary()
                 refreshPreview()
                 return
@@ -521,29 +532,150 @@ struct ARContainerView: UIViewRepresentable {
             default:
                 return
             }
+            guard var box = selectedBox() else { return }
             let t = recognizer.translation(in: arView)
             recognizer.setTranslation(.zero, in: arView)
-            let i = switch scanScene.cropAxis {
-            case .x: 0
-            case .y: 1
-            case .z: 2
+
+            if scanScene.editMode == .rotate {
+                guard case .exclusion = scanScene.editTarget else { return } // crop stays square
+                box.yaw += Float(t.x) * Self.panRadiansPerPoint
+            } else {
+                let i = switch scanScene.editAxis {
+                case .x: 0
+                case .y: 1
+                case .z: 2
+                }
+                let axis = box.axisInBaseLink(i)
+                let fallbackPoints = scanScene.editAxis == .z ? -Float(t.y) : Float(t.x)
+                let m = Self.metres(
+                    dragging: t, along: alignment.worldVector(fromBaseLink: axis),
+                    from: alignment.worldPoint(fromBaseLink: box.center), fallbackPoints: fallbackPoints, in: arView
+                )
+                if scanScene.editMode == .move {
+                    box.center += axis * m
+                } else {
+                    box.half[i] = max(Self.minBoxHalf, box.half[i] + m / 2)
+                }
             }
-            var axis = SIMD3<Float>.zero
-            axis[i] = 1
-            let fallbackPoints = scanScene.cropAxis == .z ? -Float(t.y) : Float(t.x)
-            let m = Self.metres(
-                dragging: t, along: alignment.worldVector(fromBaseLink: axis),
-                from: alignment.worldPoint(fromBaseLink: cropCenter), fallbackPoints: fallbackPoints, in: arView
+            setSelectedBox(box)
+        }
+
+        private func selectedBox() -> BaseLinkBox? {
+            switch scanScene.editTarget {
+            case .crop: scanScene.cropEnabled ? crop : nil
+            case let .exclusion(id): exclusions[id]
+            }
+        }
+
+        private func setSelectedBox(_ box: BaseLinkBox) {
+            switch scanScene.editTarget {
+            case .crop:
+                crop = box
+                cropVisual?.update(box)
+            case let .exclusion(id):
+                exclusions[id] = box
+                exclusionVisuals[id]?.update(box)
+            }
+            placeTriad()
+        }
+
+        /// Dim every box but the one being edited, and put the triad on it.
+        private func refreshBoxSelection() {
+            let editing = scanScene.isEditingBoxes
+            cropVisual?.setSelected(editing && scanScene.editTarget == .crop)
+            for (id, visual) in exclusionVisuals {
+                visual.setSelected(editing && scanScene.editTarget == .exclusion(id))
+            }
+            placeTriad()
+        }
+
+        /// The triad lives under the alignment root and draws in base_link via its own ROS frame;
+        /// to put it on a box, conjugate the box's base_link pose into that parent's AR axes.
+        private func placeTriad() {
+            guard let gizmo else { return }
+            if scanScene.isEditingBoxes, let box = selectedBox() {
+                let m = FrameConventions.rosToARFloat * box.baseLinkFromBox * FrameConventions.arToROSFloat
+                gizmo.root.transform = Transform(matrix: m)
+            } else {
+                gizmo.root.transform = .identity
+            }
+        }
+
+        private func makeExclusionVisual(_ box: BaseLinkBox, in parent: Entity) -> BoxVisual {
+            let visual = BoxVisual(color: .systemOrange, fillOpacity: 0.12)
+            visual.update(box)
+            parent.addChild(visual.root)
+            return visual
+        }
+
+        /// New exclusion box centred where the screen centre hits a surface (or 1 m ahead of the
+        /// camera if nothing is hit), axis-aligned to base_link; selected for editing right away.
+        private func addExclusion() {
+            guard let arView, let alignment, let root = alignmentRoot else {
+                scanScene.status = "Place the robot first — exclusion boxes are attached to it."
+                return
+            }
+            let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
+            let world: SIMD3<Float>
+            if let hit = arView.raycast(from: center, allowing: .estimatedPlane, alignment: .any).first {
+                let t = hit.worldTransform.columns.3
+                world = SIMD3(t.x, t.y, t.z)
+            } else {
+                let cam = arView.cameraTransform.matrix
+                let ahead = cam * SIMD4<Float>(0, 0, -1, 1)
+                world = SIMD3(ahead.x, ahead.y, ahead.z)
+            }
+            let box = BaseLinkBox(
+                center: alignment.baseLinkPoint(fromWorld: world), half: SIMD3(repeating: Self.newExclusionHalf)
             )
-            switch scanScene.cropMode {
-            case .move: cropCenter[i] += m
-            case .size: cropHalf[i] = max(Self.minCropHalf, cropHalf[i] + m / 2)
+            let id = nextExclusionID
+            nextExclusionID += 1
+            exclusions[id] = box
+            exclusionVisuals[id] = makeExclusionVisual(box, in: root)
+            scanScene.exclusionIDs.append(id)
+            scanScene.editTarget = .exclusion(id)
+            scanScene.isEditingBoxes = true
+            scene.isAligning = false
+            refreshBoxSelection()
+            refreshPreview()
+        }
+
+        private func deleteSelectedExclusion() {
+            guard case let .exclusion(id) = scanScene.editTarget else { return }
+            exclusions[id] = nil
+            exclusionVisuals.removeValue(forKey: id)?.root.removeFromParent()
+            scanScene.exclusionIDs.removeAll { $0 == id }
+            selectFallbackTarget()
+            refreshPreview()
+        }
+
+        private func removeAllExclusions() {
+            for visual in exclusionVisuals.values {
+                visual.root.removeFromParent()
             }
-            cropVisual?.update(center: cropCenter, half: cropHalf)
+            exclusions = [:]
+            exclusionVisuals = [:]
+            scanScene.exclusionIDs = []
+            selectFallbackTarget()
+        }
+
+        /// After the selected exclusion goes away: the last remaining one, else the crop box,
+        /// else stop editing.
+        private func selectFallbackTarget() {
+            if let last = scanScene.exclusionIDs.last {
+                scanScene.editTarget = .exclusion(last)
+            } else {
+                scanScene.editTarget = .crop
+                if !scanScene.cropEnabled { scanScene.isEditingBoxes = false }
+            }
+            if scanScene.editTarget == .crop, scanScene.editMode == .rotate {
+                scanScene.editMode = .move
+            }
+            refreshBoxSelection()
         }
 
         private func updateCropSummary() {
-            let size = cropHalf * 2
+            let size = crop.half * 2
             scanScene.cropSummary = scanScene.cropEnabled
                 ? String(format: "crop %.2f × %.2f × %.2f m", size.x, size.y, size.z) : nil
         }
@@ -593,6 +725,8 @@ struct ARContainerView: UIViewRepresentable {
             case .capture: captureScan()
             case .clear: clearScan()
             case .upload: uploadScan()
+            case .addExclusion: addExclusion()
+            case .deleteSelected: deleteSelectedExclusion()
             }
         }
 
@@ -662,7 +796,9 @@ struct ARContainerView: UIViewRepresentable {
             // A user Clear also empties the ROS side (ar_bridge publishes an empty cloud and
             // clears MoveIt's octomap) — otherwise RViz/MoveIt keep the last upload until the
             // next one. The restore path doesn't: it isn't the user asking to empty the scene.
-            guard resetReconstruction, let arBridgeURL = session.settings.arBridgeURL else { return }
+            guard resetReconstruction else { return }
+            removeAllExclusions()
+            guard let arBridgeURL = session.settings.arBridgeURL else { return }
             let client = ARBridgeClient(baseURL: arBridgeURL)
             uploadTask?.cancel()
             uploadTask = Task { [weak self] in
@@ -694,6 +830,7 @@ struct ARContainerView: UIViewRepresentable {
             // PLY encoding run off the main thread.
             let cloud = scanCloud
             let crop = cropBox()
+            let exclusions = exclusionBoxes()
             let robot = robotBoxes()
             let alignment = alignment
             let client = ARBridgeClient(baseURL: arBridgeURL)
@@ -702,7 +839,9 @@ struct ARContainerView: UIViewRepresentable {
             uploadTask?.cancel()
             uploadTask = Task { [weak self] in
                 let prepared = await Task.detached(priority: .userInitiated) { () -> (Data, String, Int)? in
-                    let classes = SceneFilter.classify(cloud, crop: crop, robot: robot, robotPadding: Self.robotPadding)
+                    let classes = SceneFilter.classify(
+                        cloud, crop: crop, exclusions: exclusions, robot: robot, robotPadding: Self.robotPadding
+                    )
                     let kept = cloud.selecting(classes, equalTo: .kept)
                     guard !kept.isEmpty else { return nil }
                     if let alignment {
@@ -758,9 +897,12 @@ struct ARContainerView: UIViewRepresentable {
         /// base_link, so without an alignment there's nothing to place it against).
         private func cropBox() -> OrientedBox? {
             guard scanScene.cropEnabled, let alignment else { return nil }
-            return OrientedBox(
-                worldFromBox: alignment.worldFromBaseLink, min: cropCenter - cropHalf, max: cropCenter + cropHalf
-            )
+            return crop.oriented(in: alignment)
+        }
+
+        private func exclusionBoxes() -> [OrientedBox] {
+            guard let alignment else { return [] }
+            return exclusions.values.map { $0.oriented(in: alignment) }
         }
 
         /// Re-classify and redraw — after a capture, a crop edit, and whenever the robot moves in
@@ -774,11 +916,14 @@ struct ARContainerView: UIViewRepresentable {
             let epoch = scanEpoch
             let cloud = scanCloud
             let crop = cropBox()
+            let exclusions = exclusionBoxes()
             let robot = robotBoxes()
             previewTask?.cancel()
             previewTask = Task { [weak self] in
                 let geometry = await Task.detached(priority: .userInitiated) {
-                    PreviewGeometry.compute(cloud, crop: crop, robot: robot, robotPadding: Self.robotPadding)
+                    PreviewGeometry.compute(
+                        cloud, crop: crop, exclusions: exclusions, robot: robot, robotPadding: Self.robotPadding
+                    )
                 }.value
                 guard let self, generation == previewGeneration, epoch == scanEpoch else { return }
                 // Fresh anchor on every redraw (device-confirmed fix — see `previewAnchor`).
@@ -792,8 +937,9 @@ struct ARContainerView: UIViewRepresentable {
                 scanScene.keptCount = geometry.kept
                 scanScene.robotCount = geometry.robot
                 scanScene.croppedCount = geometry.cropped
+                scanScene.excludedCount = geometry.excluded
                 scanScene.status = "\(geometry.kept) to upload, \(geometry.robot) robot, "
-                    + "\(geometry.cropped) cropped (\(lastCaptureNote))."
+                    + "\(geometry.excluded) excluded, \(geometry.cropped) cropped (\(lastCaptureNote))."
             }
         }
 

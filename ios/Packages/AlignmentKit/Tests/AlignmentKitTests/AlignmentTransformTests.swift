@@ -124,4 +124,11 @@ struct AlignmentTransformTests {
             #expect(close(FrameConventions.toROS(point: a.pointInBaseLink(viaMatrix)), v))
         }
     }
+
+    @Test func baseLinkPointInvertsWorldPoint() {
+        let a = AlignmentTransform(position: SIMD3(-0.3, 0.2, 1.1), yaw: 2.2)
+        for v in [SIMD3<Float>(0, 0, 0), SIMD3(0.4, -1.2, 0.9)] {
+            #expect(close(a.baseLinkPoint(fromWorld: a.worldPoint(fromBaseLink: v)), v))
+        }
+    }
 }

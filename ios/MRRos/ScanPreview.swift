@@ -40,6 +40,7 @@ final class ScanPreview {
         switch cls {
         case .kept: .systemGreen
         case .robot: .systemRed
+        case .excluded: .systemOrange
         case .outsideCrop: UIColor(white: 0.6, alpha: 1)
         }
     }

@@ -423,6 +423,12 @@ Device drill:
 - [ ] Edit → Move/Size along X/Y/Z follows the finger; triad highlights the active axis
 - [ ] Upload → RViz shows only green points
 - [ ] No lag on Capture or while editing the crop (after the threading change below)
+- [ ] + Exclude → orange 30 cm box at the surface under the screen centre; points inside turn orange
+      and aren't uploaded; several boxes, chips select which one a drag edits, trash deletes it
+- [ ] Exclusion boxes: Move/Size along their own axes, Rotate about vertical; triad sits on the
+      selected box and turns with it
+- [ ] Re-aligning the robot moves crop + exclusion boxes with it (all in base_link, by choice)
+- [ ] Clear deletes the exclusion boxes (crop box stays)
 
 Automated: `tools/ios-test.sh LiDARScan` — `OrientedBox` containment (padding, translation,
 rotation), `SceneFilter.classify` (robot wins over crop, no-crop/no-robot keeps all, padding),
@@ -444,3 +450,9 @@ Findings log:
   generation for previews), crop drags only move the box (label + re-filter on lift), preview draw
   cap 40k → 25k per class. Clear is race-free against a pending capture via the epoch, not a reset
   message (actor message order across separate Tasks isn't guaranteed).
+- 2026-11-18 (design, with the user): exclusion boxes added alongside crop — crop keeps what's
+  inside one box, exclusion boxes drop what's inside any of them (priority robot > excluded >
+  outside crop). User's choices: several exclusion boxes, attached to the robot (base_link, like
+  crop — they move with re-alignment), and Clear deletes them. Shared `BaseLinkBox` type
+  (centre/half/yaw, AlignmentKit, tested). Safety note: excluded space reads as FREE to MoveIt
+  (no data = free), so the preview always shows excluded points in orange.

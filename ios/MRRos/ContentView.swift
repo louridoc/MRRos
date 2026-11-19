@@ -50,8 +50,8 @@ struct ScanBar: View {
     var body: some View {
         VStack(spacing: 8) {
             Text(
-                scanScene.isEditingCrop
-                    ? "Pick Move or Size and X (red), Y (green) or Z (blue), then drag along that arrow."
+                scanScene.isEditingBoxes
+                    ? "Pick a box, Move/Size/Rotate and X (red), Y (green) or Z (blue), then drag along that arrow."
                     : scanScene.status
             )
             .font(.caption)
@@ -59,19 +59,12 @@ struct ScanBar: View {
             .multilineTextAlignment(.center)
             .foregroundStyle(.secondary)
 
-            if scanScene.isEditingCrop {
-                Picker("Crop edit", selection: $scanScene.cropMode) {
-                    ForEach(ScanScene.CropMode.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                Picker("Crop axis", selection: $scanScene.cropAxis) {
-                    ForEach(ScanScene.CropAxis.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
+            if scanScene.isEditingBoxes {
+                BoxEditControls(scanScene: scanScene)
             }
 
             HStack(spacing: 12) {
-                // Crop lives in base_link, so it needs a placed robot. Editing it and aligning
+                // Boxes live in base_link, so they need a placed robot. Editing them and aligning
                 // the robot both use the drag gesture, so turning one on turns the other off.
                 Toggle(isOn: $scanScene.cropEnabled) {
                     Label(scanScene.cropSummary ?? "Crop", systemImage: "crop")
@@ -80,13 +73,30 @@ struct ScanBar: View {
                 .toggleStyle(.button)
                 .disabled(!robotScene.isPlaced)
                 .onChange(of: scanScene.cropEnabled) { _, on in
-                    if !on { scanScene.isEditingCrop = false }
+                    if on {
+                        scanScene.editTarget = .crop
+                    } else if scanScene.editTarget == .crop {
+                        if let last = scanScene.exclusionIDs.last {
+                            scanScene.editTarget = .exclusion(last)
+                        } else {
+                            scanScene.isEditingBoxes = false
+                        }
+                    }
                 }
 
-                if scanScene.cropEnabled {
-                    Button(scanScene.isEditingCrop ? "Done" : "Edit") {
-                        scanScene.isEditingCrop.toggle()
-                        if scanScene.isEditingCrop { robotScene.isAligning = false }
+                Button {
+                    scanScene.request = .addExclusion
+                } label: {
+                    Label("Exclude", systemImage: "plus.square.dashed")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!robotScene.isPlaced)
+
+                if scanScene.cropEnabled || !scanScene.exclusionIDs.isEmpty {
+                    Button(scanScene.isEditingBoxes ? "Done" : "Edit") {
+                        scanScene.isEditingBoxes.toggle()
+                        if scanScene.isEditingBoxes { robotScene.isAligning = false }
                     }
                     .buttonStyle(.bordered)
                     .font(.caption)
@@ -126,6 +136,69 @@ struct ScanBar: View {
         }
         .padding(12)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+/// Which box a drag edits (chips: Crop · Box 1 · …), what it does (Move/Size/Rotate) and along
+/// which axis. Rotate is exclusion boxes only and needs no axis (it's about the box's vertical).
+struct BoxEditControls: View {
+    @Bindable var scanScene: ScanScene
+
+    private var editingExclusion: Bool {
+        if case .exclusion = scanScene.editTarget { true } else { false }
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 6) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        if scanScene.cropEnabled {
+                            chip("Crop", target: .crop, color: .yellow)
+                        }
+                        ForEach(Array(scanScene.exclusionIDs.enumerated()), id: \.element) { index, id in
+                            chip("Box \(index + 1)", target: .exclusion(id), color: .orange)
+                        }
+                    }
+                }
+                if editingExclusion {
+                    Button(role: .destructive) {
+                        scanScene.request = .deleteSelected
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Delete selected exclusion box")
+                }
+            }
+
+            Picker("Edit", selection: $scanScene.editMode) {
+                ForEach(ScanScene.BoxEditMode.allCases.filter { $0 != .rotate || editingExclusion }) {
+                    Text($0.rawValue).tag($0)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if scanScene.editMode != .rotate {
+                Picker("Axis", selection: $scanScene.editAxis) {
+                    ForEach(ScanScene.EditAxis.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+            }
+        }
+        .onChange(of: scanScene.editTarget) { _, target in
+            if target == .crop, scanScene.editMode == .rotate { scanScene.editMode = .move }
+        }
+    }
+
+    private func chip(_ title: String, target: ScanScene.EditTarget, color: Color) -> some View {
+        let selected = scanScene.editTarget == target
+        return Button(title) { scanScene.editTarget = target }
+            .font(.caption.weight(selected ? .bold : .regular))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(color.opacity(selected ? 0.45 : 0.15), in: Capsule())
+            .buttonStyle(.plain)
     }
 }
 
@@ -200,7 +273,7 @@ struct PlacementBar: View {
 
                 Button {
                     scene.isAligning.toggle()
-                    if scene.isAligning { scanScene.isEditingCrop = false }
+                    if scene.isAligning { scanScene.isEditingBoxes = false }
                 } label: {
                     Label(scene.isAligning ? "Done" : "Align", systemImage: "move.3d")
                 }

@@ -56,6 +56,12 @@ public struct AlignmentTransform: Sendable, Equatable {
         position + worldVector(fromBaseLink: p)
     }
 
+    /// An AR-world point expressed in `base_link` (ROS convention) — the inverse of
+    /// `worldPoint(fromBaseLink:)`, via the same path `CloudRegistration` uses.
+    public func baseLinkPoint(fromWorld p: SIMD3<Float>) -> SIMD3<Float> {
+        FrameConventions.toROS(point: pointInBaseLink(p))
+    }
+
     /// The AR-world pose of the `base_link` frame itself, ROS axes and all — for placing
     /// geometry defined in base_link (e.g. the scan crop box) as an `OrientedBox`.
     public var worldFromBaseLink: simd_float4x4 {
