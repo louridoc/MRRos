@@ -467,3 +467,7 @@ Findings log:
   drag edits something. "Capture"/"Place" labels no longer wrap: `ViewThatFits` falls back to
   icon-only when the row is full (e.g. once Edit appears).
 - [ ] Device: crosshair matches where the robot / a new exclusion box appears; Capture never wraps
+- 2026-11-18 (device): app hitches on first ROS connect. dad9ff2 moved the URDF parse off the main
+  actor and stopped the overlay observing every /joint_states — user reports no change. Next:
+  profile the connect on device (Instruments) instead of guessing.
+- [ ] No hitch when connecting to ROS
