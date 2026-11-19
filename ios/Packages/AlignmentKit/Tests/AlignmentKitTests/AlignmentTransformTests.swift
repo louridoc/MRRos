@@ -113,4 +113,15 @@ struct AlignmentTransformTests {
         #expect(close(a.position, SIMD3(1, 0, 1)))
         #expect(abs(a.yaw - yaw) < 1e-5)
     }
+
+    @Test func worldFromBaseLinkAgreesWithWorldPointAndRegistration() {
+        let a = AlignmentTransform(position: SIMD3(0.4, 0.1, -2), yaw: -0.8)
+        for v in [SIMD3<Float>(0, 0, 0), SIMD3(1, 0, 0), SIMD3(0.3, -0.7, 1.2)] {
+            let viaMatrix4 = a.worldFromBaseLink * SIMD4(v, 1)
+            let viaMatrix = SIMD3(viaMatrix4.x, viaMatrix4.y, viaMatrix4.z)
+            #expect(close(viaMatrix, a.worldPoint(fromBaseLink: v)))
+            // and back through the registration path the uploaded cloud uses
+            #expect(close(FrameConventions.toROS(point: a.pointInBaseLink(viaMatrix)), v))
+        }
+    }
 }

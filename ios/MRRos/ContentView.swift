@@ -27,9 +27,9 @@ struct ContentView: View {
                 }
                 // Both bars float directly over the live camera feed (never a sheet) — a scan
                 // is only useful if you can see where you're pointing the phone while you tap.
-                ScanBar(scanScene: scanScene)
+                ScanBar(scanScene: scanScene, robotScene: scene)
                     .padding(.horizontal)
-                PlacementBar(session: session, scene: scene)
+                PlacementBar(session: session, scene: scene, scanScene: scanScene)
                     .padding(.horizontal)
                     .padding(.bottom, 12)
             }
@@ -45,14 +45,55 @@ struct ContentView: View {
 /// (what you're actually using to aim the scan) stays visible the whole time.
 struct ScanBar: View {
     @Bindable var scanScene: ScanScene
+    @Bindable var robotScene: RobotScene
 
     var body: some View {
         VStack(spacing: 8) {
-            Text(scanScene.status)
-                .font(.caption)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+            Text(
+                scanScene.isEditingCrop
+                    ? "Pick Move or Size and X (red), Y (green) or Z (blue), then drag along that arrow."
+                    : scanScene.status
+            )
+            .font(.caption)
+            .lineLimit(2)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.secondary)
+
+            if scanScene.isEditingCrop {
+                Picker("Crop edit", selection: $scanScene.cropMode) {
+                    ForEach(ScanScene.CropMode.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Picker("Crop axis", selection: $scanScene.cropAxis) {
+                    ForEach(ScanScene.CropAxis.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            HStack(spacing: 12) {
+                // Crop lives in base_link, so it needs a placed robot. Editing it and aligning
+                // the robot both use the drag gesture, so turning one on turns the other off.
+                Toggle(isOn: $scanScene.cropEnabled) {
+                    Label(scanScene.cropSummary ?? "Crop", systemImage: "crop")
+                        .font(.caption)
+                }
+                .toggleStyle(.button)
+                .disabled(!robotScene.isPlaced)
+                .onChange(of: scanScene.cropEnabled) { _, on in
+                    if !on { scanScene.isEditingCrop = false }
+                }
+
+                if scanScene.cropEnabled {
+                    Button(scanScene.isEditingCrop ? "Done" : "Edit") {
+                        scanScene.isEditingCrop.toggle()
+                        if scanScene.isEditingCrop { robotScene.isAligning = false }
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.caption)
+                }
+                Spacer(minLength: 0)
+            }
+
             HStack(spacing: 12) {
                 Button {
                     scanScene.request = .capture
@@ -92,6 +133,7 @@ struct ScanBar: View {
 struct PlacementBar: View {
     let session: ROSSession
     @Bindable var scene: RobotScene
+    let scanScene: ScanScene
 
     var body: some View {
         VStack(spacing: 8) {
@@ -158,6 +200,7 @@ struct PlacementBar: View {
 
                 Button {
                     scene.isAligning.toggle()
+                    if scene.isAligning { scanScene.isEditingCrop = false }
                 } label: {
                     Label(scene.isAligning ? "Done" : "Align", systemImage: "move.3d")
                 }

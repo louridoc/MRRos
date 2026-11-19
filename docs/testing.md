@@ -411,6 +411,18 @@ Findings log:
   includes everything swept past — choosing a region is M5b's crop box).
 
 ## M5b — Scan preview, robot filter, crop
+Built: green/red/grey AR preview of the scan (uploaded / robot / cropped out); robot filter =
+per-link mesh bounds at the AR robot's pose + 3 cm (MoveIt's padding); crop box in base_link
+(default ±1.5 m X/Y, −0.05…2.0 m Z), edited Move/Size × X/Y/Z with the alignment-style drag, base
+triad shown while editing; re-filtered when the finger lifts. Only green points are uploaded.
+
+Device drill:
+- [x] Preview overlays the captured surfaces (after the anchor fix below) (2026-11-18)
+- [ ] Real robot's surfaces red; not too much of the surroundings red
+- [ ] Crop on → yellow box around the robot; points outside turn grey after editing
+- [ ] Edit → Move/Size along X/Y/Z follows the finger; triad highlights the active axis
+- [ ] Upload → RViz shows only green points
+
 Automated: `tools/ios-test.sh LiDARScan` — `OrientedBox` containment (padding, translation,
 rotation), `SceneFilter.classify` (robot wins over crop, no-crop/no-robot keeps all, padding),
 `PointCloud.selecting` keeps columns aligned.

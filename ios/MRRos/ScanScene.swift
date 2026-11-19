@@ -22,4 +22,29 @@ final class ScanScene {
     var isUploading = false
     var status = "Move around, then capture to add what the LiDAR has seen so far."
     var lastUploadSummary: String?
+
+    // MARK: Crop box (M5b) — a box in base_link; only points inside it are uploaded.
+
+    enum CropMode: String, CaseIterable, Identifiable {
+        case move = "Move", size = "Size"
+        var id: String {
+            rawValue
+        }
+    }
+
+    enum CropAxis: String, CaseIterable, Identifiable {
+        case x = "X", y = "Y", z = "Z"
+        var id: String {
+            rawValue
+        }
+    }
+
+    /// Crop applies (and is drawn) only while a robot is placed — it's defined in base_link.
+    var cropEnabled = false
+    /// Drag edits the box (axis-select-then-drag, like alignment). Mutually exclusive with
+    /// `RobotScene.isAligning`; the UI enforces it.
+    var isEditingCrop = false
+    var cropMode: CropMode = .size
+    var cropAxis: CropAxis = .x
+    var cropSummary: String?
 }

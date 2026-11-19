@@ -95,6 +95,13 @@ struct ARContainerView: UIViewRepresentable {
         private var alignment: AlignmentTransform?
         private var wasAligning = false
         private var highlightedAxis: RobotScene.AlignAxis?
+        /// Scan crop box in base_link (ROS axes, metres). Kept across re-placements; defaults to
+        /// a generous workspace around the base: ±1.5 m in X/Y, from 5 cm below the base to 2 m up.
+        private var cropCenter = SIMD3<Float>(0, 0, 0.975)
+        private var cropHalf = SIMD3<Float>(1.5, 1.5, 1.025)
+        private static let minCropHalf: Float = 0.05
+        private var cropVisual: CropBoxVisual?
+        private var wasCropEnabled = false
         /// `nil` only if Application Support is unavailable — saving/restoring then just reports so.
         private let alignmentStore = try? AlignmentStore.standard()
         /// Set by `restoreSaved`; cleared once ARKit relocalizes and the robot is rebuilt. Frames
@@ -201,8 +208,12 @@ struct ARContainerView: UIViewRepresentable {
                 let anchor = AnchorEntity(world: matrix_identity_float4x4)
                 let root = Entity()
                 let gizmo = BaseLinkTriad()
+                let cropVisual = CropBoxVisual()
+                cropVisual.update(center: cropCenter, half: cropHalf)
+                cropVisual.root.isEnabled = scanScene.cropEnabled
                 root.addChild(entity.root)
                 root.addChild(gizmo.root)
+                root.addChild(cropVisual.root)
                 anchor.addChild(root)
                 arView.scene.addAnchor(anchor)
                 root.transform = Transform(matrix: seeded.transform)
@@ -210,6 +221,7 @@ struct ARContainerView: UIViewRepresentable {
                 self.anchor = anchor
                 alignmentRoot = root
                 self.gizmo = gizmo
+                self.cropVisual = cropVisual
                 highlightedAxis = nil // fresh triad: let syncAligningState highlight it
                 alignment = seeded
                 robot = entity
@@ -244,6 +256,7 @@ struct ARContainerView: UIViewRepresentable {
             anchor = nil
             alignmentRoot = nil
             gizmo = nil
+            cropVisual = nil
             alignment = nil
             robot = nil
             mapper = nil
@@ -415,16 +428,33 @@ struct ARContainerView: UIViewRepresentable {
                     saveAlignment()
                     refreshPreview()
                 }
-                gizmo?.root.isEnabled = scene.isAligning
                 // Translucent robot so the triad at the base reads through it. Occlusion off while
                 // aligning: the triad sits exactly where the REAL robot's base is, so the real
                 // robot's LiDAR occlusion mesh would otherwise hide it.
                 robot?.root.components.set(OpacityComponent(opacity: scene.isAligning ? 0.45 : 1))
                 arView?.environment.sceneUnderstanding.options = scene.isAligning ? [] : [.occlusion]
             }
-            if scene.alignAxis != highlightedAxis {
-                highlightedAxis = scene.alignAxis
-                gizmo?.highlight(scene.alignAxis)
+            // The triad also shows while editing the crop box — it's in base_link too, so the
+            // arrows are the box's axes; the highlighted arrow is whichever one the drag acts on.
+            gizmo?.root.isEnabled = scene.isAligning || scanScene.isEditingCrop
+            let wanted: RobotScene.AlignAxis = if scanScene.isEditingCrop {
+                switch scanScene.cropAxis {
+                case .x: .x
+                case .y: .y
+                case .z: .z
+                }
+            } else {
+                scene.alignAxis
+            }
+            if wanted != highlightedAxis {
+                highlightedAxis = wanted
+                gizmo?.highlight(wanted)
+            }
+            if scanScene.cropEnabled != wasCropEnabled {
+                wasCropEnabled = scanScene.cropEnabled
+                cropVisual?.root.isEnabled = scanScene.cropEnabled
+                updateCropSummary()
+                refreshPreview()
             }
         }
 
@@ -433,8 +463,12 @@ struct ARContainerView: UIViewRepresentable {
         /// uses plain horizontal drag. No raycasting — see the M4 findings in docs/testing.md
         /// for why touch-point floor raycasts were abandoned.
         @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
-            guard scene.isAligning, let arView, let alignment,
-                  recognizer.state == .began || recognizer.state == .changed
+            guard let arView, let alignment else { return }
+            if scanScene.isEditingCrop {
+                dragCrop(recognizer, in: arView, alignment: alignment)
+                return
+            }
+            guard scene.isAligning, recognizer.state == .began || recognizer.state == .changed
             else { return }
             let t = recognizer.translation(in: arView)
             recognizer.setTranslation(.zero, in: arView) // consume it — a delta, not a total
@@ -450,8 +484,8 @@ struct ARContainerView: UIViewRepresentable {
                 // the floor axes, up/down for Z (screen y grows downward, hence the minus).
                 let fallbackPoints = scene.alignAxis == .z ? -Float(t.y) : Float(t.x)
                 let m = Self.metres(
-                    dragging: t, alongBaseLinkAxis: axis, fallbackPoints: fallbackPoints, of: alignment,
-                    in: arView
+                    dragging: t, along: alignment.worldVector(fromBaseLink: axis), from: alignment.position,
+                    fallbackPoints: fallbackPoints, in: arView
                 )
                 self.alignment = alignment.translatedInBaseLink(by: axis * m)
             case .yaw:
@@ -460,21 +494,64 @@ struct ARContainerView: UIViewRepresentable {
             applyAlignmentToAnchor()
         }
 
-        /// How far (metres) a screen drag `t` moves along a `base_link` axis: project a short
-        /// segment of that axis to screen, take the drag's component along it, and divide by the
-        /// segment's on-screen pixels-per-metre — so the base tracks the finger along the arrow
+        /// Crop editing: same axis-select-then-drag as alignment, along the chosen base_link axis
+        /// from the box's centre. Move shifts the box; Size grows/shrinks it symmetrically. The
+        /// scan is re-filtered when the finger lifts, not per event — re-classifying 50k+ points
+        /// and rebuilding the preview at 60 Hz would stutter.
+        private func dragCrop(_ recognizer: UIPanGestureRecognizer, in arView: ARView, alignment: AlignmentTransform) {
+            switch recognizer.state {
+            case .ended, .cancelled:
+                refreshPreview()
+                return
+            case .began, .changed:
+                break
+            default:
+                return
+            }
+            let t = recognizer.translation(in: arView)
+            recognizer.setTranslation(.zero, in: arView)
+            let i = switch scanScene.cropAxis {
+            case .x: 0
+            case .y: 1
+            case .z: 2
+            }
+            var axis = SIMD3<Float>.zero
+            axis[i] = 1
+            let fallbackPoints = scanScene.cropAxis == .z ? -Float(t.y) : Float(t.x)
+            let m = Self.metres(
+                dragging: t, along: alignment.worldVector(fromBaseLink: axis),
+                from: alignment.worldPoint(fromBaseLink: cropCenter), fallbackPoints: fallbackPoints, in: arView
+            )
+            switch scanScene.cropMode {
+            case .move: cropCenter[i] += m
+            case .size: cropHalf[i] = max(Self.minCropHalf, cropHalf[i] + m / 2)
+            }
+            cropVisual?.update(center: cropCenter, half: cropHalf)
+            updateCropSummary()
+        }
+
+        private func updateCropSummary() {
+            let size = cropHalf * 2
+            scanScene.cropSummary = scanScene.cropEnabled
+                ? String(format: "crop %.2f × %.2f × %.2f m", size.x, size.y, size.z) : nil
+        }
+
+        /// How far (metres) a screen drag `t` moves along a world direction `direction` starting
+        /// at world point `origin` (the base for alignment, the box centre for cropping): project
+        /// a short segment of it to screen, take the drag's component along it, and divide by the
+        /// segment's on-screen pixels-per-metre — so the thing tracks the finger along the arrow
         /// regardless of distance or viewing angle. Falls back to `fallbackPoints` at a fixed
-        /// scale when the axis is foreshortened (pointing at the camera) or the base is off-screen.
+        /// scale when the direction is foreshortened (pointing at the camera) or off-screen.
         private static func metres(
             dragging t: CGPoint,
-            alongBaseLinkAxis axis: SIMD3<Float>,
+            along direction: SIMD3<Float>,
+            from origin: SIMD3<Float>,
             fallbackPoints: Float,
-            of alignment: AlignmentTransform,
             in arView: ARView
         ) -> Float {
             let segment: Float = 0.25
-            let tip = alignment.position + alignment.worldVector(fromBaseLink: axis) * segment
-            if let p0 = arView.project(alignment.position), let p1 = arView.project(tip) {
+            let tip = origin + direction * segment
+            if let p0 = arView.project(origin), let p1 = arView.project(tip) {
                 let onScreen = SIMD2(Float(p1.x - p0.x), Float(p1.y - p0.y))
                 let pixels = simd_length(onScreen)
                 if pixels > 20 {
@@ -679,7 +756,16 @@ struct ARContainerView: UIViewRepresentable {
         }
 
         private func classifyScan() -> [PointClass] {
-            SceneFilter.classify(scanCloud, crop: nil, robot: robotBoxes(), robotPadding: Self.robotPadding)
+            SceneFilter.classify(scanCloud, crop: cropBox(), robot: robotBoxes(), robotPadding: Self.robotPadding)
+        }
+
+        /// The crop box in AR world — only while enabled and a robot is placed (it's defined in
+        /// base_link, so without an alignment there's nothing to place it against).
+        private func cropBox() -> OrientedBox? {
+            guard scanScene.cropEnabled, let alignment else { return nil }
+            return OrientedBox(
+                worldFromBox: alignment.worldFromBaseLink, min: cropCenter - cropHalf, max: cropCenter + cropHalf
+            )
         }
 
         /// Re-classify and redraw — after a capture, and whenever the robot moves in the world
