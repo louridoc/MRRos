@@ -34,7 +34,10 @@ struct ARContainerView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> ARView {
-        let view = ARView(frame: .zero)
+        // We configure and run the session ourselves (scene reconstruction, scene depth,
+        // restores, mesh resets); RealityKit's automatic configuration would otherwise re-run it
+        // with its own config whenever sceneUnderstanding options change (e.g. entering align mode).
+        let view = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
         view.environment.sceneUnderstanding.options = [.occlusion]
         view.debugOptions = [.showWorldOrigin]
         view.session.run(Self.makeConfiguration())
@@ -116,6 +119,9 @@ struct ARContainerView: UIViewRepresentable {
         /// `captureScan`/`uploadScan`). Re-voxelized after every capture so repeated taps don't
         /// make the cloud grow without bound from re-scanning the same surfaces.
         private var scanCloud = PointCloud.empty
+        /// When Clear last asked ARKit to restart its scene mesh — shown on Capture so a device
+        /// test can tell whether the reset actually took (a capture right after it should be tiny).
+        private var lastMeshReset: Date?
         private let scanVoxelSize: Float = 0.02
 
         /// Built fresh per placement from the session's CURRENT host, so a reconnect to a
@@ -269,7 +275,10 @@ struct ARContainerView: UIViewRepresentable {
             // anchor being replaced, which must not satisfy the capture check.
             let anchor = ARAnchor(name: AlignmentStore.anchorName, transform: alignment.transform)
             arView.session.add(anchor: anchor)
-            pendingSave = (SavedAlignmentInfo(robotName: scene.placedRobotName, savedAt: Date()), anchor.identifier)
+            pendingSave = (
+                SavedAlignmentInfo(robotName: scene.placedRobotName, savedAt: Date()),
+                anchor.identifier
+            )
             scene.status = "Saving alignment…"
         }
 
@@ -288,7 +297,8 @@ struct ARContainerView: UIViewRepresentable {
                     // Exactly the anchor just placed — not a stale one, not two of them.
                     let robotAnchors = map.anchors.filter { $0.name == AlignmentStore.anchorName }
                     guard robotAnchors.count == 1, robotAnchors[0].identifier == anchorID else {
-                        throw AlignmentStoreError.corrupt("world map was captured without the current robot anchor")
+                        throw AlignmentStoreError
+                            .corrupt("world map was captured without the current robot anchor")
                     }
                     let data = try NSKeyedArchiver.archivedData(
                         withRootObject: map,
@@ -346,7 +356,7 @@ struct ARContainerView: UIViewRepresentable {
             }
 
             remove()
-            clearScan()
+            clearScan(resetReconstruction: false)
             let config = ARContainerView.makeConfiguration()
             config.initialWorldMap = map
             arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
@@ -514,29 +524,69 @@ struct ARContainerView: UIViewRepresentable {
             scanCloud.append(batch)
             scanCloud = VoxelFilter.downsample(scanCloud, voxelSize: scanVoxelSize)
             scanScene.pointCount = scanCloud.count
-            scanScene.status = "\(scanCloud.count) points scanned so far."
+            let vertices = meshAnchors.reduce(0) { $0 + $1.geometry.vertices.count }
+            let since = lastMeshReset.map { String(format: " · mesh reset %.0f s ago", Date().timeIntervalSince($0)) } ?? ""
+            scanScene.status = "\(scanCloud.count) points scanned so far "
+                + "(\(meshAnchors.count) ARKit mesh pieces, \(vertices) vertices\(since))."
+            log.info("capture: \(meshAnchors.count) mesh anchors, \(vertices) vertices, total \(self.scanCloud.count)\(since, privacy: .public)")
         }
 
         private static func worldVertices(of meshAnchor: ARMeshAnchor) -> [SIMD3<Float>] {
             let source = meshAnchor.geometry.vertices
+            guard source.format == .float3 else { return [] }
             let transform = meshAnchor.transform
             var points: [SIMD3<Float>] = []
             points.reserveCapacity(source.count)
-            let buffer = source.buffer.contents()
+            let base = UnsafeRawPointer(source.buffer.contents()).advanced(by: source.offset)
             for i in 0 ..< source.count {
-                let vertexPointer = buffer.advanced(by: source.offset + i * source.stride)
-                let local = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
-                let world = transform * SIMD4(local, 1)
+                // ARKit packs vertices as 3 floats (12 bytes). Never read them as SIMD3<Float>:
+                // that type is 16 bytes / 16-aligned, so it misaligns and over-reads the last
+                // vertex past the buffer end — EXC_BAD_ACCESS whenever that end hits a page
+                // boundary (crashed on a ~98k-point scan).
+                let (x, y, z) = base.loadUnaligned(
+                    fromByteOffset: i * source.stride, as: (Float, Float, Float).self
+                )
+                let world = transform * SIMD4(x, y, z, 1)
                 points.append(SIMD3(world.x, world.y, world.z))
             }
             return points
         }
 
-        private func clearScan() {
+        /// `resetReconstruction`: also restart ARKit's scene mesh, so the next Capture only contains
+        /// what's scanned from now on — Capture harvests ARKit's whole fused mesh, so clearing only
+        /// our buffer brought every previously-seen surface straight back. Tracking is NOT reset:
+        /// the world frame, the alignment and the placed robot all stay valid. Off for the restore
+        /// path, which has just re-run the session from the saved map itself.
+        private func clearScan(resetReconstruction: Bool = true) {
+            if resetReconstruction, let arView {
+                // Prefer the running config (keeps everything it has); never skip the reset just
+                // because it can't be read back — rebuild ours instead.
+                let config = (arView.session.configuration?.copy() as? ARWorldTrackingConfiguration)
+                    ?? ARContainerView.makeConfiguration()
+                config.initialWorldMap = nil // don't trigger a second relocalization
+                arView.session.run(config, options: [.resetSceneReconstruction])
+                lastMeshReset = Date()
+                log.info("scene reconstruction reset requested")
+            }
             scanCloud = .empty
             scanScene.pointCount = 0
             scanScene.lastUploadSummary = nil
             scanScene.status = "Scan cleared. Move around, then capture again."
+            // A user Clear also empties the ROS side (ar_bridge publishes an empty cloud and
+            // clears MoveIt's octomap) — otherwise RViz/MoveIt keep the last upload until the
+            // next one. The restore path doesn't: it isn't the user asking to empty the scene.
+            guard resetReconstruction, let arBridgeURL = session.settings.arBridgeURL else { return }
+            let client = ARBridgeClient(baseURL: arBridgeURL)
+            uploadTask?.cancel()
+            uploadTask = Task { [weak self] in
+                do {
+                    try await client.clearCloud(name: "live_scan")
+                    self?.scanScene.status = "Scan cleared here and on ROS. Move around, then capture again."
+                } catch {
+                    self?.log.error("cloud clear failed: \(String(describing: error), privacy: .public)")
+                    self?.scanScene.status = "Scan cleared here; couldn't clear ROS side: \(error)"
+                }
+            }
         }
 
         private func uploadScan() {

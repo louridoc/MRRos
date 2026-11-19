@@ -15,11 +15,13 @@ from pathlib import Path
 
 import rclpy
 from aiohttp import web
+from builtin_interfaces.msg import Time
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import PointCloud2
+from std_srvs.srv import Empty
 
-from ar_bridge.cloud import ingest
+from ar_bridge.cloud import build_point_cloud2, ingest
 from ar_bridge.http_api import Handlers, MeshResult, make_app
 from ar_bridge.mesh_resolver import MeshCache, resolve_mesh
 from ar_bridge.ply import DecodedCloud, PLYError, decode, merge
@@ -39,6 +41,9 @@ class ARBridge(Node):
         self.declare_parameter("output_dir", os.path.expanduser("~/.mrros/clouds"))
         self.declare_parameter("mesh_cache_dir", os.path.expanduser("~/.mrros/mesh_cache"))
         self.declare_parameter("cloud_topic", "/mrros/static_cloud")
+        # MoveIt's octomap only ever adds what it's sent; clear it before each publish so an
+        # upload REPLACES the scene there too. Empty string disables. No-op without MoveIt.
+        self.declare_parameter("clear_octomap_service", "/clear_octomap")
 
         self.port = int(self.get_parameter("http_port").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
@@ -47,11 +52,15 @@ class ARBridge(Node):
         self.mesh_cache = MeshCache(str(self.get_parameter("mesh_cache_dir").value))
         self.cloud_topic = str(self.get_parameter("cloud_topic").value)
         self.cloud_pub = self.create_publisher(PointCloud2, self.cloud_topic, _LATCHED_QOS)
+        clear_srv = str(self.get_parameter("clear_octomap_service").value)
+        self._clear_octomap = self.create_client(Empty, clear_srv) if clear_srv else None
         # One accumulator per `name` (mode=append target); see docs/protocols/ar_bridge_http.md.
         self._clouds: dict[str, DecodedCloud] = {}
 
         # M3's on_cloud and M2b's get_mesh are both live.
-        self.handlers = Handlers(get_mesh=self._get_mesh, on_cloud=self._on_cloud)
+        self.handlers = Handlers(
+            get_mesh=self._get_mesh, on_cloud=self._on_cloud, on_clear=self._on_clear
+        )
         distro = os.environ.get("ROS_DISTRO", "?")
         self.get_logger().info(
             f"http on :{self.port}, frame_id={self.frame_id}, out={self.output_dir}, "
@@ -82,9 +91,13 @@ class ARBridge(Node):
         self._clouds[name] = decoded
 
         # PCD writing is the dominant cost at scan scale (~2s/1M points even vectorized) — keep
-        # it off the event loop too, same reasoning as decode() above. clock_now is read here,
-        # not inside the executor thread, to avoid calling rclpy's clock off the node's own thread.
-        clock_now = self.get_clock().now().to_msg()
+        # it off the event loop too, same reasoning as decode() above.
+        #
+        # Stamp 0 = "use the latest transform": this is static data (the robot doesn't move during
+        # a scan). Stamping it "now" raced TF — MoveIt's self-filter looks up every robot link at
+        # the cloud's exact stamp, which is often a few ms newer than the last 30 Hz joint TF, so
+        # some links weren't filtered and the robot collided with its own scan, intermittently.
+        stamp = Time()
         result = await loop.run_in_executor(
             None,
             lambda: ingest(
@@ -92,19 +105,61 @@ class ARBridge(Node):
                 frame_id=frame_id,
                 output_dir=self.output_dir,
                 name=name,
-                clock_now=clock_now,
+                clock_now=stamp,
             ),
         )
+        cleared = await self._clear_moveit_octomap()
         self.cloud_pub.publish(result.message)
         self.get_logger().info(
             f"cloud '{name}' ({mode}): {result.point_count} pts -> {self.cloud_topic}, "
-            f"{result.pcd_path}"
+            f"{result.pcd_path}{' (MoveIt octomap cleared first)' if cleared else ''}"
         )
         return {
             "points": result.point_count,
             "file": str(result.pcd_path),
             "topic": self.cloud_topic,
         }
+
+    async def _on_clear(self, meta: dict[str, str]) -> dict:
+        """DELETE /v0/cloud: the app's Clear. Drops the stored scan(s), publishes an EMPTY latched
+        cloud so every subscriber (RViz, MoveIt, late joiners) sees the scene emptied rather
+        than keeping the last upload, and clears MoveIt's octomap. `?name=` clears one
+        accumulator; without it, all. The .pcd files on disk are kept as a record."""
+        name = meta.get("name")
+        if name:
+            self._clouds.pop(name, None)
+        else:
+            self._clouds.clear()
+        frame_id = meta.get("frame_id") or self.frame_id
+        empty = build_point_cloud2(DecodedCloud.empty(), frame_id=frame_id, stamp=Time())
+        cleared = await self._clear_moveit_octomap()
+        self.cloud_pub.publish(empty)
+        self.get_logger().info(
+            f"cleared {name or 'all clouds'} -> empty {self.cloud_topic}"
+            f"{' (MoveIt octomap cleared)' if cleared else ''}"
+        )
+        return {
+            "cleared": name or "all",
+            "topic": self.cloud_topic,
+            "moveit_octomap_cleared": cleared,
+        }
+
+    async def _clear_moveit_octomap(self, timeout_s: float = 2.0) -> bool:
+        """Clears MoveIt's octomap if move_group is up. Every published cloud is the complete
+        scan (replace) or the complete merged accumulator (append), so clearing first is right in
+        both modes. rclpy spins on its own thread; poll its future from asyncio with a timeout so
+        a stuck move_group can't hold up the upload."""
+        if self._clear_octomap is None or not self._clear_octomap.service_is_ready():
+            return False
+        future = self._clear_octomap.call_async(Empty.Request())
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        while not future.done():
+            if loop.time() > deadline:
+                self.get_logger().warning("clear_octomap timed out; publishing anyway")
+                return False
+            await asyncio.sleep(0.02)
+        return True
 
     def serve_forever(self) -> None:
         app = make_app(self.handlers, node_name=self.get_name())

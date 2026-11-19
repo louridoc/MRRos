@@ -165,4 +165,31 @@ struct ARBridgeClientTests {
             _ = try await client.uploadCloud(Data(), frameId: "map")
         }
     }
+
+    // MARK: - clearCloud
+
+    @Test func clearCloudSendsDeleteWithName() async throws {
+        let mock = MockHTTPTransport()
+        await mock.respond(
+            whenURLContains: "/v0/cloud",
+            with: HTTPResponse(statusCode: 200, data: Data(#"{"cleared":"live_scan"}"#.utf8), headers: [:])
+        )
+        let client = ARBridgeClient(baseURL: baseURL, transport: mock)
+        try await client.clearCloud(name: "live_scan")
+        let url = try #require(await mock.deletedURLs.first)
+        #expect(url.path == "/v0/cloud")
+        #expect(url.query == "name=live_scan")
+    }
+
+    @Test func clearCloudOnOlderBridgeIsNotImplemented() async {
+        let mock = MockHTTPTransport()
+        await mock.respond(
+            whenURLContains: "/v0/cloud",
+            with: HTTPResponse(statusCode: 501, data: Data("nope".utf8), headers: [:])
+        )
+        let client = ARBridgeClient(baseURL: baseURL, transport: mock)
+        await #expect(throws: ARBridgeError.notImplemented("nope")) {
+            try await client.clearCloud()
+        }
+    }
 }

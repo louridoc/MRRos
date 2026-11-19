@@ -27,6 +27,7 @@ class Handlers:
 
     on_cloud: Callable[[bytes, dict[str, str]], Awaitable[dict]] | None = None
     get_mesh: Callable[[str], Awaitable[MeshResult]] | None = None
+    on_clear: Callable[[dict[str, str]], Awaitable[dict]] | None = None
 
 
 def _error_response(e: Exception) -> web.Response:
@@ -61,6 +62,15 @@ def make_app(handlers: Handlers, *, node_name: str = "ar_bridge") -> web.Applica
             return _error_response(e)
         return web.json_response(result)
 
+    async def clear_cloud(request: web.Request) -> web.Response:
+        if handlers.on_clear is None:
+            raise web.HTTPNotImplemented(reason="cloud clear not wired")
+        try:
+            result = await handlers.on_clear(dict(request.query.items()))
+        except Exception as e:
+            return _error_response(e)
+        return web.json_response(result)
+
     async def mesh(request: web.Request) -> web.Response:
         if handlers.get_mesh is None:
             raise web.HTTPNotImplemented(reason="mesh serving arrives in M2b")
@@ -77,6 +87,7 @@ def make_app(handlers: Handlers, *, node_name: str = "ar_bridge") -> web.Applica
         [
             web.get("/health", health),
             web.post("/v0/cloud", cloud),
+            web.delete("/v0/cloud", clear_cloud),
             web.get("/v0/mesh", mesh),
         ]
     )

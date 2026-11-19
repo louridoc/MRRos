@@ -109,6 +109,20 @@ public struct ARBridgeClient: Sendable {
         }
     }
 
+    /// `DELETE /v0/cloud[?name=]` — the app's Clear: ar_bridge drops the stored scan, publishes
+    /// an empty cloud (RViz/MoveIt empty too) and clears MoveIt's octomap.
+    public func clearCloud(name: String? = nil) async throws {
+        let url = try makeURL(path: "/v0/cloud", queryItems: name.map { [URLQueryItem(name: "name", value: $0)] } ?? [])
+        let response = try await perform { try await transport.delete(url) }
+        switch response.statusCode {
+        case 200: return
+        case 501: throw ARBridgeError.notImplemented(bodyText(response))
+        default:
+            log.error("cloud clear got unexpected status \(response.statusCode)")
+            throw ARBridgeError.serverError(status: response.statusCode, message: bodyText(response))
+        }
+    }
+
     /// `GET /health`.
     public func health() async throws -> ARBridgeHealth {
         let url = baseURL.appendingPathComponent("health")

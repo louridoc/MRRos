@@ -324,3 +324,88 @@ Device drill:
 
 Core save → relaunch → restore flow device-confirmed ("Works!", 2026-11-17); the edge cases
 above (unrelated-area restore, Forget across relaunch, post-restore scan) not explicitly checked.
+
+## M5a — Planning-scene research spike
+Write-up: `docs/research/m5a-scene-ingestion.md` (verified vs documentation-only claims marked).
+
+Automated end-to-end check (run on the Mac, both vendors): `tools/moveit_scene_check.py` uploads a
+wall + points sampled on the robot's own collision meshes through ar_bridge's HTTP endpoint and
+asserts: blocked pose becomes invalid, start stays valid (self-filter), goal clear, OMPL plan found,
+every waypoint collision-free.
+- [x] UR10e — 2/2 runs pass (2026-11-18)
+- [x] CRX-30iA (`positions:="0,0.7,0,0,0,0"`) — 3/3 runs pass (2026-11-18)
+
+Findings log:
+- 2026-11-18: `move_group` invisible to every other node. Ruled out RMW mismatch (all CycloneDDS),
+  launch context, and UDP message size (CYCLONEDDS_URI tried, reverted). Cyclone tracing showed
+  others discovered move_group but it discovered no one → incoming traffic blocked → macOS
+  application firewall had no rule for the new binary. User allowed it; fixed.
+- 2026-11-18: octomap updater plugin missing — RoboStack's `moveit` doesn't pull in
+  `moveit_ros_perception`; installed and added to the env template.
+- 2026-11-18: CRX plans failed three different ways, none of them MoveIt bugs: my test wall's
+  inner corridor (0.35 m) was swept by the CRX's offset shoulder housing (→ 0.5 m); Ruckig
+  smoothing failed under FANUC's 0.4 rad/s² limits (dropped for planning-only); FANUC's OMPL
+  config is keyed to group `arm` vs SRDF group `manipulator`, so its collision-check resolution
+  never applied and OMPL accepted a path grazing the wall (set on the real group, 0.005).
+- 2026-11-18: an early version of the check sampled "robot" points on straight lines between link
+  frame origins — those aren't on a UR's arm, so they weren't (correctly) filtered. Now sampled on
+  the actual collision meshes from `/robot_description`.
+- 2026-11-18: a MoveIt started after an upload never sees it; a cloud arriving in move_group's
+  first seconds isn't self-filtered (silently). Drives the M5c "clear-then-publish, repeatedly"
+  design.
+- 2026-11-18 (M3 bug, found during an M5 device test): EXC_BAD_ACCESS in `worldVertices` on a
+  ~98k-point scan. Vertices were read as `SIMD3<Float>` (16 bytes, 16-aligned) from ARKit's packed
+  `.float3` buffer (12-byte stride): misaligned reads, and the last vertex over-read 4 bytes past
+  the buffer — crashing only when that end landed on a page boundary, so M3's smaller scans never
+  hit it. Now reads 3 unaligned `Float`s per vertex and checks the source format.
+
+## M5 — Fake trajectory execution (dev-only)
+`mock_joints` is now also a fake `FollowJointTrajectory` controller
+(`mrros_mock_controller/follow_joint_trajectory`): trajectories are played back onto
+`/joint_states` (linear interpolation, final pose held; preempt/cancel supported) and MoveIt is
+configured to use it with `moveit.launch.py execute:=true` (default; `false` = planning only).
+Simulation only — real motion commands remain a v1 non-goal. Playback logic is rclpy-free
+(`trajectory_playback.py`) with pytest coverage.
+
+Automated: `tools/moveit_scene_check.py --execute` additionally executes the plan and asserts MoveIt
+reports success and `/joint_states` ends at the goal.
+- [x] CRX-30iA — 5/5 back-to-back runs, no settle wait, first right after startup (2026-11-18)
+- [x] UR10e — 4/4 same conditions (2026-11-18)
+- [ ] Device: Plan & Execute in RViz moves the AR robot on the phone (follows /joint_states)
+
+Findings log:
+- 2026-11-18: repeated --execute runs failed in three ways, two of them test geometry: the next run
+  starts at the last goal, so +120° more left the CRX's ±180° J1 range (script now swings toward the
+  side with room); swinging the other way, the CRX's shoulder housing (~50° off the arm direction,
+  out to ~0.5 m) leads instead of trails and started inside a 0.5 m corridor (→ 0.7 m).
+- 2026-11-18: the third was real and is the root cause of M5a's "first seconds" finding: an
+  intermittent `shape_mask: Missing transform` — the self-filter looks up robot link TF at the
+  cloud's exact stamp, which ar_bridge set to "now", often newer than the last joint TF. ar_bridge
+  now stamps the static cloud 0 (latest transform). 0 missing-transform errors in 9 runs since.
+- 2026-11-18 (device test): after Clear in the app and "Clear octomap" in RViz, new uploads still
+  showed old points. Two causes. (1) App: Clear only emptied our buffer, but Capture harvests
+  ARKit's whole fused scene mesh, so previously-seen surfaces came straight back — Clear now also
+  re-runs the session with `.resetSceneReconstruction` (tracking untouched: world frame, alignment
+  and robot stay; skipped on the restore path). (2) MoveIt: the octomap only ever adds; ar_bridge
+  now calls `/clear_octomap` before every publish (no-op without MoveIt, 2 s timeout), so an upload
+  replaces the scene there too — verified live (box → small far cloud: blocked pose becomes free).
+- 2026-11-18: OMPL occasionally accepted UR paths grazing the wall (state 9/25 rejected by
+  ValidateSolution) at MoveIt's default 0.5% collision-check step (~0.15 rad on ±360° joints).
+  Now 0.2% for every robot: 6/6 UR10e + 6/6 CRX-30iA --execute runs pass, planning ≤ 0.12 s.
+- 2026-11-18 (device test, follow-up): user saw RViz still showing old points after pressing
+  Clear. Measured MoveIt's octomap (decoded the octree from /get_planning_scene): it held exactly
+  the last upload — uploads were replacing correctly. The gap was Clear itself: it only reset the
+  phone, sending nothing to ROS, so RViz kept the last upload until the next one. Added
+  `DELETE /v0/cloud` (drops stored scan, clears MoveIt's octomap, publishes an empty latched cloud)
+  and the app's Clear calls it. Verified live: blocked pose free again, latched topic width 0, and
+  MoveIt's /monitored_planning_scene broadcast (what RViz draws) goes from a 283 KB octomap to empty.
+- [x] Device: press Clear in the app → RViz's octomap empties without uploading (2026-11-18)
+- 2026-11-18 (device test, second follow-up): after Clear, a capture 5 s later still had ~19k
+  points — the ARKit mesh reset wasn't happening. It only ran if `session.configuration` could be
+  read back as a world-tracking config, and silently skipped otherwise; RealityKit's default
+  `automaticallyConfigureSession` also re-runs the session with its own config (e.g. when align
+  mode toggles occlusion). Fixed: ARView created with `automaticallyConfigureSession: false`, and the
+  reset falls back to our own `makeConfiguration()` instead of skipping. Capture's status now shows
+  ARKit mesh pieces/vertices and time since the reset. Device-confirmed: reset runs; a capture after
+  Clear contains only what the camera has seen since (ARKit meshes continuously, so "since Clear"
+  includes everything swept past — choosing a region is M5b's crop box).

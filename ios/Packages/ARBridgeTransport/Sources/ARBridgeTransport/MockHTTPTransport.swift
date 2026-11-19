@@ -26,6 +26,13 @@ public actor MockHTTPTransport: HTTPTransport {
         try respond(to: url)
     }
 
+    public private(set) var deletedURLs: [URL] = []
+
+    public func delete(_ url: URL) async throws -> HTTPResponse {
+        deletedURLs.append(url)
+        return try respond(to: url)
+    }
+
     public func post(_ url: URL, body: Data) async throws -> HTTPResponse {
         postedBodies.append(body)
         return try respond(to: url)

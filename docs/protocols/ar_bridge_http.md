@@ -19,7 +19,9 @@ Body: binary PLY (little-endian, `x y z` float32, optional `confidence` uint8, o
 | `mode` | no | `replace` (default, overwrites `name`'s accumulator) or `append` (concatenates onto whatever was last stored under `name`; missing `confidence`/`color` columns on either side are backfilled with 0/black rather than dropped — see `ply.merge`) |
 
 Always publishes the single latched `/mrros/static_cloud` topic (`sensor_msgs/PointCloud2`,
-`TRANSIENT_LOCAL` + `RELIABLE` QoS) regardless of `name` — `name` only selects the `.pcd` file
+`TRANSIENT_LOCAL` + `RELIABLE` QoS, header stamp **0** = "use the latest transform" since the
+scan is static — a "now" stamp raced TF in MoveIt's self-filter, see docs/testing.md M5) regardless of `name`. Before each publish it calls MoveIt's `/clear_octomap` when move_group is up (param
+`clear_octomap_service`, empty disables), since MoveIt's octomap otherwise accumulates every upload — `name` only selects the `.pcd` file
 and the append accumulator, not which topic gets the update. The iOS app accumulates and
 voxel-filters client-side across multiple captures and always uploads with a fixed
 `name="live_scan"` + `mode=replace`, so one upload call fully replaces both the topic and that
@@ -30,6 +32,15 @@ that want the server to do the accumulation instead.
 Errors: `400` malformed PLY (bad magic/format/header, unsupported property order, truncated
 body) or missing/invalid `frame_id`/`mode`; `413` body over `client_max_size` (256 MiB, enforced
 by aiohttp before the handler runs).
+
+## DELETE /v0/cloud  (M5)
+The app's **Clear**. Query: `name` (optional — clears that accumulator; without it, all),
+`frame_id` (optional, for the empty message; default the node's `frame_id`).
+Drops the stored scan(s), clears MoveIt's octomap (if move_group is up) and publishes an **empty**
+latched cloud on the same topic, so RViz, MoveIt and late joiners all see the scene emptied. The
+`.pcd` files already on disk are kept.
+→ `200 {"cleared": "<name>|all", "topic": "/mrros/static_cloud", "moveit_octomap_cleared": bool}`
+Errors: `501` on an ar_bridge without this endpoint (the app reports "couldn't clear ROS side").
 
 ## GET /v0/mesh?uri=package://pkg/path.dae  (M2b)
 → `200` body = **Wavefront OBJ** bytes (`Content-Type: model/obj`), header `X-Mesh-SHA256` =
@@ -59,3 +70,4 @@ when no manifest entry names the file explicitly.
 - v0 (2026-11-17): `/v0/cloud` implemented (`ply.py`, `cloud.py`, `node.py`'s `_on_cloud`) —
   `501` dropped from its error set now that it's wired; `mode=append`'s accumulation key and
   backfill semantics specified above once actually built, instead of left open in the draft.
+- v0 (2026-11-18): `DELETE /v0/cloud` added; uploads clear MoveIt's octomap first; cloud stamp 0.
