@@ -456,3 +456,9 @@ Findings log:
   crop — they move with re-alignment), and Clear deletes them. Shared `BaseLinkBox` type
   (centre/half/yaw, AlignmentKit, tested). Safety note: excluded space reads as FREE to MoveIt
   (no data = free), so the preview always shows excluded points in orange.
+- 2026-11-18 (device): "too many panels blocking the AR view". Chosen with the user: mode tabs —
+  one compact bottom panel (single status line, edit pickers only while editing, action row of the
+  active tab, Robot | Scan switch); joints panel behind a toggle next to the connection pill.
+  Switching tabs ends that tab's drag mode. Layout checked in the iOS Simulator (overlay only —
+  no ARKit there).
+- [ ] Device: AR view mostly unobstructed; both tabs usable one-handed

@@ -1,39 +1,59 @@
 import AppCore
 import SwiftUI
 
-/// AR view with the ROS status strip, robot placement controls, the live joints panel, and
-/// the connection sheet.
+/// AR view with a minimal overlay: the connection pill on top (joints panel behind a toggle) and
+/// ONE compact panel at the bottom — a single status line, edit pickers only while editing, and
+/// the action row of the active mode, switched by a Robot | Scan tab. Everything floats over the
+/// live camera (never a sheet): aligning and scanning both depend on seeing the room.
 struct ContentView: View {
+    enum Mode: String, CaseIterable, Identifiable {
+        case robot = "Robot", scan = "Scan"
+        var id: String {
+            rawValue
+        }
+    }
+
     @State private var session = ROSSession()
     @State private var scene = RobotScene()
     @State private var scanScene = ScanScene()
     @State private var showConnection = false
+    @State private var showJoints = false
+    @State private var mode: Mode = .robot
 
     var body: some View {
         ZStack {
             ARContainerView(session: session, scene: scene, scanScene: scanScene)
                 .ignoresSafeArea()
-            VStack(spacing: 10) {
-                StatusStrip(session: session) { showConnection = true }
-                    .padding(.top, 8)
-                Spacer()
-                if let js = session.jointState {
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    StatusStrip(session: session) { showConnection = true }
+                    if session.jointState != nil {
+                        Button {
+                            showJoints.toggle()
+                        } label: {
+                            Image(systemName: showJoints ? "chevron.up" : "slider.horizontal.3")
+                                .padding(9)
+                                .background(.ultraThinMaterial, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(showJoints ? "Hide joints" : "Show joints")
+                    }
+                }
+                .padding(.top, 8)
+                if showJoints, let js = session.jointState {
                     JointsPanel(
                         jointState: js, rateHz: session.jointRateHz,
                         robotName: session.robotName, lastUpdate: session.lastJointUpdate
                     )
                     .padding(.horizontal)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                // Both bars float directly over the live camera feed (never a sheet) — a scan
-                // is only useful if you can see where you're pointing the phone while you tap.
-                ScanBar(scanScene: scanScene, robotScene: scene)
+                Spacer()
+                ControlPanel(session: session, scene: scene, scanScene: scanScene, mode: $mode)
                     .padding(.horizontal)
-                PlacementBar(session: session, scene: scene, scanScene: scanScene)
-                    .padding(.horizontal)
-                    .padding(.bottom, 12)
+                    .padding(.bottom, 8)
             }
-            .animation(.default, value: session.jointState == nil)
+            .animation(.default, value: showJoints)
         }
         .sheet(isPresented: $showConnection) {
             ConnectionSheet(session: session)
@@ -41,101 +61,207 @@ struct ContentView: View {
     }
 }
 
-/// Capture/clear/upload the environment scan — an overlay, not a sheet, so the AR camera feed
-/// (what you're actually using to aim the scan) stays visible the whole time.
-struct ScanBar: View {
+/// The single bottom panel.
+struct ControlPanel: View {
+    let session: ROSSession
+    @Bindable var scene: RobotScene
+    @Bindable var scanScene: ScanScene
+    @Binding var mode: ContentView.Mode
+
+    private var statusLine: String {
+        switch mode {
+        case .robot:
+            scene.isAligning ? "Pick an axis, drag along its arrow (Rotate Z: drag sideways). Done when it overlays." : scene.status
+        case .scan:
+            scanScene.isEditingBoxes ? "Pick a box, then Move/Size/Rotate along an arrow." : scanScene.status
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text(statusLine)
+                .font(.caption)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+
+            switch mode {
+            case .robot:
+                if scene.isAligning {
+                    Picker("Axis", selection: $scene.alignAxis) {
+                        ForEach(RobotScene.AlignAxis.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                RobotActions(session: session, scene: scene, scanScene: scanScene)
+            case .scan:
+                if scanScene.isEditingBoxes {
+                    BoxEditControls(scanScene: scanScene)
+                }
+                ScanActions(scanScene: scanScene, robotScene: scene)
+            }
+
+            Picker("Mode", selection: $mode) {
+                ForEach(ContentView.Mode.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 220)
+        }
+        .padding(10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        // Leaving a tab ends its drag mode, so a drag can never act on something hidden.
+        .onChange(of: mode) { _, newMode in
+            if newMode != .robot { scene.isAligning = false }
+            if newMode != .scan { scanScene.isEditingBoxes = false }
+        }
+    }
+}
+
+/// Robot tab: place / align / remove, plus restore/forget when a saved alignment exists.
+struct RobotActions: View {
+    let session: ROSSession
+    @Bindable var scene: RobotScene
+    let scanScene: ScanScene
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button {
+                scene.request = .place
+            } label: {
+                Label(scene.isPlaced ? "Re-place" : "Place", systemImage: "figure.stand")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(session.urdfRobot == nil || scene.isBuilding)
+
+            Button {
+                scene.isAligning.toggle()
+                if scene.isAligning { scanScene.isEditingBoxes = false }
+            } label: {
+                Label(scene.isAligning ? "Done" : "Align", systemImage: "move.3d")
+            }
+            .buttonStyle(.bordered)
+            .disabled(!scene.isPlaced)
+
+            if scene.savedAlignment != nil, !scene.isPlaced {
+                Button {
+                    scene.request = .restoreSaved
+                } label: {
+                    if scene.isRestoring {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "clock.arrow.circlepath")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(session.urdfRobot == nil || scene.isRestoring || scene.isBuilding)
+                .accessibilityLabel(restoreLabel)
+
+                Button(role: .destructive) {
+                    scene.request = .forgetSaved
+                } label: {
+                    Image(systemName: "xmark.circle")
+                }
+                .buttonStyle(.bordered)
+                .disabled(scene.isRestoring)
+                .accessibilityLabel("Forget saved alignment")
+            }
+
+            Button(role: .destructive) {
+                scene.request = .remove
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.bordered)
+            .disabled(!scene.isPlaced)
+            .accessibilityLabel("Remove robot")
+        }
+    }
+
+    private var restoreLabel: String {
+        guard let saved = scene.savedAlignment else { return "Restore saved alignment" }
+        return "Restore saved alignment · \(saved.robotName ?? "robot") · "
+            + saved.savedAt.formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
+/// Scan tab: capture / clear / upload, crop on/off, add exclusion box, edit boxes.
+struct ScanActions: View {
     @Bindable var scanScene: ScanScene
     @Bindable var robotScene: RobotScene
 
     var body: some View {
-        VStack(spacing: 8) {
-            Text(
-                scanScene.isEditingBoxes
-                    ? "Pick a box, Move/Size/Rotate and X (red), Y (green) or Z (blue), then drag along that arrow."
-                    : scanScene.status
-            )
-            .font(.caption)
-            .lineLimit(2)
-            .multilineTextAlignment(.center)
-            .foregroundStyle(.secondary)
-
-            if scanScene.isEditingBoxes {
-                BoxEditControls(scanScene: scanScene)
+        HStack(spacing: 8) {
+            Button {
+                scanScene.request = .capture
+            } label: {
+                Label("Capture", systemImage: "camera.metering.matrix")
+                    .frame(maxWidth: .infinity)
             }
+            .buttonStyle(.borderedProminent)
 
-            HStack(spacing: 12) {
-                // Boxes live in base_link, so they need a placed robot. Editing them and aligning
-                // the robot both use the drag gesture, so turning one on turns the other off.
-                Toggle(isOn: $scanScene.cropEnabled) {
-                    Label(scanScene.cropSummary ?? "Crop", systemImage: "crop")
-                        .font(.caption)
-                }
-                .toggleStyle(.button)
-                .disabled(!robotScene.isPlaced)
-                .onChange(of: scanScene.cropEnabled) { _, on in
-                    if on {
-                        scanScene.editTarget = .crop
-                    } else if scanScene.editTarget == .crop {
-                        if let last = scanScene.exclusionIDs.last {
-                            scanScene.editTarget = .exclusion(last)
-                        } else {
-                            scanScene.isEditingBoxes = false
-                        }
-                    }
-                }
-
-                Button {
-                    scanScene.request = .addExclusion
-                } label: {
-                    Label("Exclude", systemImage: "plus.square.dashed")
-                        .font(.caption)
-                }
-                .buttonStyle(.bordered)
-                .disabled(!robotScene.isPlaced)
-
-                if scanScene.cropEnabled || !scanScene.exclusionIDs.isEmpty {
-                    Button(scanScene.isEditingBoxes ? "Done" : "Edit") {
-                        scanScene.isEditingBoxes.toggle()
-                        if scanScene.isEditingBoxes { robotScene.isAligning = false }
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.caption)
-                }
-                Spacer(minLength: 0)
+            Button(role: .destructive) {
+                scanScene.request = .clear
+            } label: {
+                Image(systemName: "trash")
             }
+            .buttonStyle(.bordered)
+            .disabled(scanScene.pointCount == 0 && scanScene.exclusionIDs.isEmpty)
+            .accessibilityLabel("Clear scan and exclusion boxes")
 
-            HStack(spacing: 12) {
-                Button {
-                    scanScene.request = .capture
-                } label: {
-                    Label("Capture", systemImage: "camera.metering.matrix")
-                        .frame(maxWidth: .infinity)
+            Button {
+                scanScene.request = .upload
+            } label: {
+                if scanScene.isUploading {
+                    ProgressView()
+                } else {
+                    Image(systemName: "arrow.up.circle")
                 }
-                .buttonStyle(.borderedProminent)
+            }
+            .buttonStyle(.bordered)
+            .disabled(scanScene.pointCount == 0 || scanScene.isUploading)
+            .accessibilityLabel("Upload scan")
 
-                Button(role: .destructive) {
-                    scanScene.request = .clear
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.bordered)
-                .disabled(scanScene.pointCount == 0)
-
-                Button {
-                    scanScene.request = .upload
-                } label: {
-                    if scanScene.isUploading {
-                        ProgressView()
+            // Boxes live in base_link, so they need a placed robot.
+            Toggle(isOn: $scanScene.cropEnabled) {
+                Image(systemName: "crop")
+            }
+            .toggleStyle(.button)
+            .disabled(!robotScene.isPlaced)
+            .accessibilityLabel(scanScene.cropSummary ?? "Crop box")
+            .onChange(of: scanScene.cropEnabled) { _, on in
+                if on {
+                    scanScene.editTarget = .crop
+                } else if scanScene.editTarget == .crop {
+                    if let last = scanScene.exclusionIDs.last {
+                        scanScene.editTarget = .exclusion(last)
                     } else {
-                        Image(systemName: "arrow.up.circle")
+                        scanScene.isEditingBoxes = false
                     }
                 }
+            }
+
+            Button {
+                scanScene.request = .addExclusion
+            } label: {
+                Image(systemName: "plus.square.dashed")
+            }
+            .buttonStyle(.bordered)
+            .disabled(!robotScene.isPlaced)
+            .accessibilityLabel("Add exclusion box")
+
+            if scanScene.cropEnabled || !scanScene.exclusionIDs.isEmpty {
+                Button {
+                    scanScene.isEditingBoxes.toggle()
+                    if scanScene.isEditingBoxes { robotScene.isAligning = false }
+                } label: {
+                    Image(systemName: scanScene.isEditingBoxes ? "checkmark" : "pencil")
+                }
                 .buttonStyle(.bordered)
-                .disabled(scanScene.pointCount == 0 || scanScene.isUploading)
+                .accessibilityLabel(scanScene.isEditingBoxes ? "Done editing boxes" : "Edit boxes")
             }
         }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 }
 
@@ -202,97 +328,6 @@ struct BoxEditControls: View {
     }
 }
 
-/// Place / remove the robot and show what the AR coordinator reports.
-struct PlacementBar: View {
-    let session: ROSSession
-    @Bindable var scene: RobotScene
-    let scanScene: ScanScene
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Text(
-                scene.isAligning
-                    ? "Pick X (red), Y (green) or Z (blue) and drag along that arrow, or Rotate Z and drag sideways. Done when it overlays the real robot."
-                    : scene.status
-            )
-            .font(.caption)
-            .lineLimit(2)
-            .multilineTextAlignment(.center)
-            .foregroundStyle(.secondary)
-
-            if scene.isAligning {
-                Picker("Axis", selection: $scene.alignAxis) {
-                    ForEach(RobotScene.AlignAxis.allCases) { axis in
-                        Text(axis.rawValue).tag(axis)
-                    }
-                }
-                .pickerStyle(.segmented)
-            }
-
-            if let saved = scene.savedAlignment, !scene.isPlaced {
-                HStack(spacing: 12) {
-                    Button {
-                        scene.request = .restoreSaved
-                    } label: {
-                        if scene.isRestoring {
-                            Label("Relocalizing…", systemImage: "location.viewfinder")
-                                .frame(maxWidth: .infinity)
-                        } else {
-                            Label(
-                                "Restore saved · \(saved.robotName ?? "robot") · "
-                                    + saved.savedAt.formatted(date: .abbreviated, time: .shortened),
-                                systemImage: "clock.arrow.circlepath"
-                            )
-                            .frame(maxWidth: .infinity)
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(session.urdfRobot == nil || scene.isRestoring || scene.isBuilding)
-
-                    Button(role: .destructive) {
-                        scene.request = .forgetSaved
-                    } label: {
-                        Image(systemName: "xmark.circle")
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(scene.isRestoring)
-                    .accessibilityLabel("Forget saved alignment")
-                }
-                .font(.caption)
-            }
-
-            HStack(spacing: 12) {
-                Button {
-                    scene.request = .place
-                } label: {
-                    Label(scene.isPlaced ? "Re-place" : "Place robot", systemImage: "figure.stand")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(session.urdfRobot == nil || scene.isBuilding)
-
-                Button {
-                    scene.isAligning.toggle()
-                    if scene.isAligning { scanScene.isEditingBoxes = false }
-                } label: {
-                    Label(scene.isAligning ? "Done" : "Align", systemImage: "move.3d")
-                }
-                .buttonStyle(.bordered)
-                .disabled(!scene.isPlaced)
-
-                Button(role: .destructive) {
-                    scene.request = .remove
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.bordered)
-                .disabled(!scene.isPlaced)
-            }
-        }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
-    }
-}
 
 #Preview {
     ContentView()
