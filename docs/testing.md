@@ -462,3 +462,8 @@ Findings log:
   Switching tabs ends that tab's drag mode. Layout checked in the iOS Simulator (overlay only —
   no ARKit there).
 - [ ] Device: AR view mostly unobstructed; both tabs usable one-handed
+- 2026-11-18: crosshair at the exact screen centre (where Place and + Exclude raycast from),
+  full-screen like the AR view so the centres coincide — verified in the Simulator; hidden while a
+  drag edits something. "Capture"/"Place" labels no longer wrap: `ViewThatFits` falls back to
+  icon-only when the row is full (e.g. once Edit appears).
+- [ ] Device: crosshair matches where the robot / a new exclusion box appears; Capture never wraps

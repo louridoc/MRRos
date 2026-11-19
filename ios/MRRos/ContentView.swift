@@ -24,6 +24,14 @@ struct ContentView: View {
         ZStack {
             ARContainerView(session: session, scene: scene, scanScene: scanScene)
                 .ignoresSafeArea()
+            // Placing the robot and adding an exclusion box both raycast from the exact screen
+            // centre; full-screen like the AR view so the two centres coincide. Hidden while a
+            // drag edits something, where it means nothing.
+            if !scene.isAligning, !scanScene.isEditingBoxes {
+                Crosshair()
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+            }
             VStack(spacing: 8) {
                 HStack(spacing: 8) {
                     StatusStrip(session: session) { showConnection = true }
@@ -58,6 +66,45 @@ struct ContentView: View {
         .sheet(isPresented: $showConnection) {
             ConnectionSheet(session: session)
         }
+    }
+}
+
+/// Title + icon when the row has room, icon only when it doesn't — never wrapped onto two lines.
+struct FittingLabel: View {
+    let title: String
+    let systemImage: String
+
+    init(_ title: String, systemImage: String) {
+        self.title = title
+        self.systemImage = systemImage
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            Label(title, systemImage: systemImage).lineLimit(1)
+            Label(title, systemImage: systemImage).labelStyle(.iconOnly)
+        }
+        .accessibilityLabel(title)
+    }
+}
+
+/// A small "+" at the exact screen centre, outlined so it reads on any background.
+struct Crosshair: View {
+    var body: some View {
+        ZStack {
+            ForEach([0.0, 90.0], id: \.self) { angle in
+                Capsule()
+                    .fill(.white)
+                    .frame(width: 26, height: 2.5)
+                    .shadow(color: .black.opacity(0.8), radius: 1)
+                    .rotationEffect(.degrees(angle))
+            }
+            Circle()
+                .stroke(.white.opacity(0.9), lineWidth: 1.5)
+                .frame(width: 10, height: 10)
+                .shadow(color: .black.opacity(0.8), radius: 1)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -129,7 +176,7 @@ struct RobotActions: View {
             Button {
                 scene.request = .place
             } label: {
-                Label(scene.isPlaced ? "Re-place" : "Place", systemImage: "figure.stand")
+                FittingLabel(scene.isPlaced ? "Re-place" : "Place", systemImage: "figure.stand")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -196,7 +243,7 @@ struct ScanActions: View {
             Button {
                 scanScene.request = .capture
             } label: {
-                Label("Capture", systemImage: "camera.metering.matrix")
+                FittingLabel("Capture", systemImage: "camera.metering.matrix")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
