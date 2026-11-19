@@ -413,7 +413,7 @@ Findings log:
 ## M5b — Scan preview, robot filter, crop
 Built: green/red/grey AR preview of the scan (uploaded / robot / cropped out); robot filter =
 per-link mesh bounds at the AR robot's pose + 3 cm (MoveIt's padding); crop box in base_link
-(default ±1.5 m X/Y, −0.05…2.0 m Z), edited Move/Size × X/Y/Z with the alignment-style drag, base
+(default ±0.8 m X/Y, −0.05…1.4 m Z — the first default, ±1.5 m / 2 m, was too big on device), edited Move/Size × X/Y/Z with the alignment-style drag, base
 triad shown while editing; re-filtered when the finger lifts. Only green points are uploaded.
 
 Device drill:
@@ -422,6 +422,7 @@ Device drill:
 - [ ] Crop on → yellow box around the robot; points outside turn grey after editing
 - [ ] Edit → Move/Size along X/Y/Z follows the finger; triad highlights the active axis
 - [ ] Upload → RViz shows only green points
+- [ ] No lag on Capture or while editing the crop (after the threading change below)
 
 Automated: `tools/ios-test.sh LiDARScan` — `OrientedBox` containment (padding, translation,
 rotation), `SceneFilter.classify` (robot wins over crop, no-crop/no-robot keeps all, padding),
@@ -434,3 +435,12 @@ Findings log:
   (`.resetTracking, .removeExistingAnchors`) moves the world frame and drops them, stranding the
   preview by exactly that jump. Now re-created on every redraw (same lifetime as the robot's).
   Device: "way better".
+- 2026-11-18 (device): Capture and crop edits lagged. Everything ran on the main thread, and each
+  capture re-voxelized the whole accumulated scan from scratch. Now: the main thread only memcpy's
+  ARKit's vertex buffers (`MeshChunk`); a `ScanProcessor` actor transforms them into a persistent
+  `VoxelAccumulator` (only new points touched; re-captured surfaces refine, don't grow — tested),
+  classification + preview geometry + upload registration/PLY encoding run detached, meshes are
+  created with RealityKit's async `MeshResource(from:)`, stale results are dropped (epoch for Clear,
+  generation for previews), crop drags only move the box (label + re-filter on lift), preview draw
+  cap 40k → 25k per class. Clear is race-free against a pending capture via the epoch, not a reset
+  message (actor message order across separate Tasks isn't guaranteed).

@@ -96,9 +96,9 @@ struct ARContainerView: UIViewRepresentable {
         private var wasAligning = false
         private var highlightedAxis: RobotScene.AlignAxis?
         /// Scan crop box in base_link (ROS axes, metres). Kept across re-placements; defaults to
-        /// a generous workspace around the base: ±1.5 m in X/Y, from 5 cm below the base to 2 m up.
-        private var cropCenter = SIMD3<Float>(0, 0, 0.975)
-        private var cropHalf = SIMD3<Float>(1.5, 1.5, 1.025)
+        /// a workspace around the base: ±0.8 m in X/Y, from 5 cm below the base to 1.4 m up.
+        private var cropCenter = SIMD3<Float>(0, 0, 0.675)
+        private var cropHalf = SIMD3<Float>(0.8, 0.8, 0.725)
         private static let minCropHalf: Float = 0.05
         private var cropVisual: CropBoxVisual?
         private var wasCropEnabled = false
@@ -128,6 +128,15 @@ struct ARContainerView: UIViewRepresentable {
         private var scanCloud = PointCloud.empty
         /// Drawn at a world-fixed anchor so it exists whether or not a robot is placed.
         private let preview = ScanPreview()
+        /// Heavy scan work runs here, off the main thread (see ScanProcessing.swift).
+        private let processor: ScanProcessor
+        /// Bumped by Clear; captures/previews started under an older epoch are discarded.
+        private var scanEpoch = 0
+        /// Bumped per preview request; only the newest result is shown.
+        private var previewGeneration = 0
+        private var captureTask: Task<Void, Never>?
+        private var previewTask: Task<Void, Never>?
+        private var lastCaptureNote = ""
         /// Re-created on every redraw, never kept from app start: RealityKit backs world anchors
         /// with ARKit anchors, and a restore (`.resetTracking, .removeExistingAnchors`) moves the
         /// world frame and drops them — an anchor made at launch left the preview displaced by
@@ -135,11 +144,11 @@ struct ARContainerView: UIViewRepresentable {
         private var previewAnchor: AnchorEntity?
         /// Matches MoveIt's sensors_3d padding_offset so the phone and MoveIt agree on what
         /// "the robot" is (MoveIt's filter is exact-mesh, ours is per-link bounding boxes).
-        private static let robotPadding: Float = 0.03
+        nonisolated private static let robotPadding: Float = 0.03
         /// When Clear last asked ARKit to restart its scene mesh — shown on Capture so a device
         /// test can tell whether the reset actually took (a capture right after it should be tiny).
         private var lastMeshReset: Date?
-        private let scanVoxelSize: Float = 0.02
+        private static let scanVoxelSize: Float = 0.02
 
         /// Built fresh per placement from the session's CURRENT host, so a reconnect to a
         /// different lab PC (or ar_bridge simply coming up after rosbridge) is picked up without
@@ -154,6 +163,7 @@ struct ARContainerView: UIViewRepresentable {
             self.session = session
             self.scene = scene
             self.scanScene = scanScene
+            processor = ScanProcessor(voxelSize: Self.scanVoxelSize)
             super.init()
         }
 
@@ -501,6 +511,9 @@ struct ARContainerView: UIViewRepresentable {
         private func dragCrop(_ recognizer: UIPanGestureRecognizer, in arView: ARView, alignment: AlignmentTransform) {
             switch recognizer.state {
             case .ended, .cancelled:
+                // SwiftUI state and the re-filter only on lift — per-event updates re-render the
+                // bars and re-classify 50k+ points at 60 Hz.
+                updateCropSummary()
                 refreshPreview()
                 return
             case .began, .changed:
@@ -527,7 +540,6 @@ struct ARContainerView: UIViewRepresentable {
             case .size: cropHalf[i] = max(Self.minCropHalf, cropHalf[i] + m / 2)
             }
             cropVisual?.update(center: cropCenter, half: cropHalf)
-            updateCropSummary()
         }
 
         private func updateCropSummary() {
@@ -601,46 +613,22 @@ struct ARContainerView: UIViewRepresentable {
                 scanScene.status = "No scene mesh yet — move around a bit so LiDAR can see the room."
                 return
             }
-
-            var bx: [Float] = [], by: [Float] = [], bz: [Float] = []
-            for meshAnchor in meshAnchors {
-                for worldVertex in Self.worldVertices(of: meshAnchor) {
-                    bx.append(worldVertex.x); by.append(worldVertex.y); bz.append(worldVertex.z)
-                }
-            }
-            let batch = PointCloud(x: bx, y: by, z: bz, confidence: [UInt8](repeating: 2, count: bx.count))
-
-            scanCloud.append(batch)
-            scanCloud = VoxelFilter.downsample(scanCloud, voxelSize: scanVoxelSize)
-            scanScene.pointCount = scanCloud.count
-            refreshPreview()
-            let vertices = meshAnchors.reduce(0) { $0 + $1.geometry.vertices.count }
+            // Main thread: only copy ARKit's vertex buffers out (one memcpy per mesh piece).
+            // Transforming, voxelizing, classifying and preview geometry all happen off it.
+            let chunks = meshAnchors.compactMap(MeshChunk.init)
+            let vertices = chunks.reduce(0) { $0 + $1.count }
             let since = lastMeshReset.map { String(format: " · mesh reset %.0f s ago", Date().timeIntervalSince($0)) } ?? ""
-            scanScene.status = "\(scanScene.keptCount) to upload, \(scanScene.robotCount) robot, "
-                + "\(scanScene.croppedCount) cropped (\(meshAnchors.count) ARKit mesh pieces, "
-                + "\(vertices) vertices\(since))."
-            log.info("capture: \(meshAnchors.count) mesh anchors, \(vertices) vertices, total \(self.scanCloud.count)\(since, privacy: .public)")
-        }
-
-        private static func worldVertices(of meshAnchor: ARMeshAnchor) -> [SIMD3<Float>] {
-            let source = meshAnchor.geometry.vertices
-            guard source.format == .float3 else { return [] }
-            let transform = meshAnchor.transform
-            var points: [SIMD3<Float>] = []
-            points.reserveCapacity(source.count)
-            let base = UnsafeRawPointer(source.buffer.contents()).advanced(by: source.offset)
-            for i in 0 ..< source.count {
-                // ARKit packs vertices as 3 floats (12 bytes). Never read them as SIMD3<Float>:
-                // that type is 16 bytes / 16-aligned, so it misaligns and over-reads the last
-                // vertex past the buffer end — EXC_BAD_ACCESS whenever that end hits a page
-                // boundary (crashed on a ~98k-point scan).
-                let (x, y, z) = base.loadUnaligned(
-                    fromByteOffset: i * source.stride, as: (Float, Float, Float).self
-                )
-                let world = transform * SIMD4(x, y, z, 1)
-                points.append(SIMD3(world.x, world.y, world.z))
+            lastCaptureNote = "\(meshAnchors.count) ARKit mesh pieces, \(vertices) vertices\(since)"
+            scanScene.status = "Processing capture…"
+            let epoch = scanEpoch
+            let processor = processor
+            captureTask = Task { [weak self] in
+                let cloud = await processor.add(chunks, epoch: epoch)
+                guard let self, epoch == self.scanEpoch else { return } // a Clear happened meanwhile
+                scanCloud = cloud
+                scanScene.pointCount = cloud.count
+                refreshPreview()
             }
-            return points
         }
 
         /// `resetReconstruction`: also restart ARKit's scene mesh, so the next Capture only contains
@@ -659,6 +647,12 @@ struct ARContainerView: UIViewRepresentable {
                 lastMeshReset = Date()
                 log.info("scene reconstruction reset requested")
             }
+            scanEpoch += 1
+            captureTask?.cancel()
+            previewTask?.cancel()
+            let epoch = scanEpoch
+            let processor = processor
+            Task { await processor.release(epoch: epoch) }
             scanCloud = .empty
             preview.clear()
             (scanScene.keptCount, scanScene.robotCount, scanScene.croppedCount) = (0, 0, 0)
@@ -693,35 +687,40 @@ struct ARContainerView: UIViewRepresentable {
             }
 
             // Registration: if the robot has been placed/aligned, re-express every point
-            // relative to that alignment (position AND yaw — full registration, not M3's
-            // translation-only stopgap) before rotating into ROS axis convention, so the cloud
-            // lands in base_link where the gizmo says the robot actually is. Recomputed from
-            // whatever the CURRENT alignment is at upload time, not baked in at capture time,
-            // so re-aligning doesn't require re-scanning.
-            let classes = classifyScan()
-            let kept = scanCloud.selecting(classes, equalTo: .kept)
-            guard !kept.isEmpty else {
-                scanScene.status = "Nothing left to upload — every point was filtered out (robot/crop)."
-                return
-            }
-            let frameId: String
-            let toUpload: PointCloud
-            if let alignment {
-                toUpload = CloudRegistration.registering(kept, against: alignment)
-                frameId = "base_link"
-            } else {
-                toUpload = CloudRegistration.rotatedToROSAxes(kept)
-                frameId = "map"
-                scanScene.status = "No robot placed — uploading unregistered (frame \"map\")."
-            }
-
+            // relative to that alignment (position AND yaw) before rotating into ROS axis
+            // convention, so the cloud lands in base_link where the gizmo says the robot is.
+            // Uses the CURRENT alignment/crop/robot pose — re-aligning doesn't need a re-scan.
+            // Inputs are snapshotted here (boxes need RealityKit); filtering, registration and
+            // PLY encoding run off the main thread.
+            let cloud = scanCloud
+            let crop = cropBox()
+            let robot = robotBoxes()
+            let alignment = alignment
             let client = ARBridgeClient(baseURL: arBridgeURL)
-            let data = PLYCodec.encode(toUpload)
             scanScene.isUploading = true
-            scanScene.status = "Uploading \(toUpload.count) points…"
+            scanScene.status = "Preparing upload…"
             uploadTask?.cancel()
             uploadTask = Task { [weak self] in
+                let prepared = await Task.detached(priority: .userInitiated) { () -> (Data, String, Int)? in
+                    let classes = SceneFilter.classify(cloud, crop: crop, robot: robot, robotPadding: Self.robotPadding)
+                    let kept = cloud.selecting(classes, equalTo: .kept)
+                    guard !kept.isEmpty else { return nil }
+                    if let alignment {
+                        let registered = CloudRegistration.registering(kept, against: alignment)
+                        return (PLYCodec.encode(registered), "base_link", registered.count)
+                    }
+                    let unregistered = CloudRegistration.rotatedToROSAxes(kept)
+                    return (PLYCodec.encode(unregistered), "map", unregistered.count)
+                }.value
                 guard let self else { return }
+                guard let (data, frameId, count) = prepared else {
+                    scanScene.status = "Nothing left to upload — every point was filtered out (robot/crop)."
+                    scanScene.isUploading = false
+                    return
+                }
+                scanScene.status = frameId == "map"
+                    ? "No robot placed — uploading \(count) points unregistered (frame \"map\")…"
+                    : "Uploading \(count) points…"
                 do {
                     // Fixed name + `.replace`: the client already holds the full accumulated,
                     // voxel-filtered state, so every upload fully replaces the latched topic and
@@ -755,10 +754,6 @@ struct ARContainerView: UIViewRepresentable {
             }
         }
 
-        private func classifyScan() -> [PointClass] {
-            SceneFilter.classify(scanCloud, crop: cropBox(), robot: robotBoxes(), robotPadding: Self.robotPadding)
-        }
-
         /// The crop box in AR world — only while enabled and a robot is placed (it's defined in
         /// base_link, so without an alignment there's nothing to place it against).
         private func cropBox() -> OrientedBox? {
@@ -768,22 +763,38 @@ struct ARContainerView: UIViewRepresentable {
             )
         }
 
-        /// Re-classify and redraw — after a capture, and whenever the robot moves in the world
-        /// (placed, re-placed, aligned), since that changes which points are "robot".
+        /// Re-classify and redraw — after a capture, a crop edit, and whenever the robot moves in
+        /// the world (placed, re-placed, aligned), since that changes which points are "robot".
+        /// Inputs are snapshotted here on the main thread (the boxes need RealityKit entities);
+        /// classification and geometry run off it; stale results are dropped.
         private func refreshPreview() {
-            guard !scanCloud.isEmpty else { return }
-            let classes = classifyScan()
-            if let arView {
+            guard !scanCloud.isEmpty, let arView else { return }
+            previewGeneration += 1
+            let generation = previewGeneration
+            let epoch = scanEpoch
+            let cloud = scanCloud
+            let crop = cropBox()
+            let robot = robotBoxes()
+            previewTask?.cancel()
+            previewTask = Task { [weak self] in
+                let geometry = await Task.detached(priority: .userInitiated) {
+                    PreviewGeometry.compute(cloud, crop: crop, robot: robot, robotPadding: Self.robotPadding)
+                }.value
+                guard let self, generation == previewGeneration, epoch == scanEpoch else { return }
+                // Fresh anchor on every redraw (device-confirmed fix — see `previewAnchor`).
                 previewAnchor.map { arView.scene.removeAnchor($0) }
                 let anchor = AnchorEntity(world: matrix_identity_float4x4)
                 anchor.addChild(preview.root)
                 arView.scene.addAnchor(anchor)
                 previewAnchor = anchor
+                await preview.show(geometry)
+                guard generation == previewGeneration else { return }
+                scanScene.keptCount = geometry.kept
+                scanScene.robotCount = geometry.robot
+                scanScene.croppedCount = geometry.cropped
+                scanScene.status = "\(geometry.kept) to upload, \(geometry.robot) robot, "
+                    + "\(geometry.cropped) cropped (\(lastCaptureNote))."
             }
-            preview.show(scanCloud, classes: classes)
-            scanScene.keptCount = classes.count(where: { $0 == .kept })
-            scanScene.robotCount = classes.count(where: { $0 == .robot })
-            scanScene.croppedCount = classes.count(where: { $0 == .outsideCrop })
         }
 
         // MARK: Per-frame
