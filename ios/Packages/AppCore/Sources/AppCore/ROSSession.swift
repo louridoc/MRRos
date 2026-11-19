@@ -22,6 +22,10 @@ public final class ROSSession {
     public private(set) var lastError: String?
     public private(set) var topics: [TopicInfo] = []
     public private(set) var jointState: SensorMsgs.JointState?
+    /// Flips once when `/joint_states` starts (and back on disconnect). Views that only need to
+    /// know joints exist observe this, not `jointState` — which changes ~30×/s and would
+    /// re-render them on every message.
+    public private(set) var isReceivingJoints = false
     /// Measured `/joint_states` rate over the last ~1 s window.
     public private(set) var jointRateHz: Double = 0
     /// Wall-clock time of the last `/joint_states`; the UI flags the panel stale when this ages.
@@ -90,6 +94,7 @@ public final class ROSSession {
         await client.disconnect()
         state = .disconnected
         jointState = nil
+        isReceivingJoints = false
         jointRateHz = 0
         lastJointUpdate = nil
         robotName = nil
@@ -121,6 +126,7 @@ public final class ROSSession {
             for await js in sub.messages {
                 guard let self else { return }
                 jointState = js
+                if !isReceivingJoints { isReceivingJoints = true }
                 lastJointUpdate = Date()
                 noteJointStamp()
             }
@@ -130,16 +136,27 @@ public final class ROSSession {
             defer { sub.cancel() }
             for await msg in sub.messages {
                 guard let self else { return }
-                urdf = msg.data
-                do {
-                    let parsed = try URDFParser.parse(msg.data)
+                // Parse off the main actor: a full robot description is a long XML document, and
+                // parsing it here froze the AR view for a moment right after connecting.
+                let text = msg.data
+                let start = ContinuousClock.now
+                let (result, fallbackName) = await Task.detached(priority: .userInitiated) {
+                    (Result { try URDFParser.parse(text) }, Self.robotName(in: text))
+                }.value
+                let elapsed = ContinuousClock.now - start
+                log.info(
+                    "URDF \(text.utf8.count, privacy: .public) B parsed off-main in \(elapsed, privacy: .public)"
+                )
+                urdf = text
+                switch result {
+                case let .success(parsed):
                     urdfRobot = parsed
                     urdfError = nil
-                    robotName = parsed.name.isEmpty ? Self.robotName(in: msg.data) : parsed.name
-                } catch {
+                    robotName = parsed.name.isEmpty ? fallbackName : parsed.name
+                case let .failure(error):
                     urdfRobot = nil
                     urdfError = "\(error)"
-                    robotName = Self.robotName(in: msg.data)
+                    robotName = fallbackName
                     log.error("URDF parse failed: \(String(describing: error), privacy: .public)")
                 }
             }
@@ -165,7 +182,7 @@ public final class ROSSession {
 
     /// `<robot … name="…">` from a URDF string, without a full XML parse (URDFKit does that in M2).
     /// Matches the attribute `name` only (not `filename=`), anywhere inside the `<robot` tag.
-    static func robotName(in urdf: String) -> String? {
+    nonisolated static func robotName(in urdf: String) -> String? {
         let pattern = /<robot\b[^>]*?\sname="([^"]+)"/
         return urdf.firstMatch(of: pattern).map { String($0.1) }
     }

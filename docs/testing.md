@@ -409,3 +409,67 @@ Findings log:
   ARKit mesh pieces/vertices and time since the reset. Device-confirmed: reset runs; a capture after
   Clear contains only what the camera has seen since (ARKit meshes continuously, so "since Clear"
   includes everything swept past — choosing a region is M5b's crop box).
+
+## M5b — Scan preview, robot filter, crop
+Built: green/red/grey AR preview of the scan (uploaded / robot / cropped out); robot filter =
+per-link mesh bounds at the AR robot's pose + 3 cm (MoveIt's padding); crop box in base_link
+(default ±0.8 m X/Y, −0.05…1.4 m Z — the first default, ±1.5 m / 2 m, was too big on device), edited Move/Size × X/Y/Z with the alignment-style drag, base
+triad shown while editing; re-filtered when the finger lifts. Only green points are uploaded.
+
+Device drill:
+- [x] Preview overlays the captured surfaces (after the anchor fix below) (2026-11-18)
+- [ ] Real robot's surfaces red; not too much of the surroundings red
+- [ ] Crop on → yellow box around the robot; points outside turn grey after editing
+- [ ] Edit → Move/Size along X/Y/Z follows the finger; triad highlights the active axis
+- [ ] Upload → RViz shows only green points
+- [ ] No lag on Capture or while editing the crop (after the threading change below)
+- [ ] + Exclude → orange 30 cm box at the surface under the screen centre; points inside turn orange
+      and aren't uploaded; several boxes, chips select which one a drag edits, trash deletes it
+- [ ] Exclusion boxes: Move/Size along their own axes, Rotate about vertical; triad sits on the
+      selected box and turns with it
+- [ ] Re-aligning the robot moves crop + exclusion boxes with it (all in base_link, by choice)
+- [ ] Clear deletes the exclusion boxes (crop box stays)
+
+Automated: `tools/ios-test.sh LiDARScan` — `OrientedBox` containment (padding, translation,
+rotation), `SceneFilter.classify` (robot wins over crop, no-crop/no-robot keeps all, padding),
+`PointCloud.selecting` keeps columns aligned.
+
+Findings log:
+- 2026-11-18 (device): preview points appeared away from where they were captured ("to my left
+  and back") while the same scan uploaded correctly to RViz. The preview's world anchor was made
+  once at app launch; RealityKit backs world anchors with ARKit anchors, and a restore
+  (`.resetTracking, .removeExistingAnchors`) moves the world frame and drops them, stranding the
+  preview by exactly that jump. Now re-created on every redraw (same lifetime as the robot's).
+  Device: "way better".
+- 2026-11-18 (device): Capture and crop edits lagged. Everything ran on the main thread, and each
+  capture re-voxelized the whole accumulated scan from scratch. Now: the main thread only memcpy's
+  ARKit's vertex buffers (`MeshChunk`); a `ScanProcessor` actor transforms them into a persistent
+  `VoxelAccumulator` (only new points touched; re-captured surfaces refine, don't grow — tested),
+  classification + preview geometry + upload registration/PLY encoding run detached, meshes are
+  created with RealityKit's async `MeshResource(from:)`, stale results are dropped (epoch for Clear,
+  generation for previews), crop drags only move the box (label + re-filter on lift), preview draw
+  cap 40k → 25k per class. Clear is race-free against a pending capture via the epoch, not a reset
+  message (actor message order across separate Tasks isn't guaranteed).
+- 2026-11-18 (design, with the user): exclusion boxes added alongside crop — crop keeps what's
+  inside one box, exclusion boxes drop what's inside any of them (priority robot > excluded >
+  outside crop). User's choices: several exclusion boxes, attached to the robot (base_link, like
+  crop — they move with re-alignment), and Clear deletes them. Shared `BaseLinkBox` type
+  (centre/half/yaw, AlignmentKit, tested). Safety note: excluded space reads as FREE to MoveIt
+  (no data = free), so the preview always shows excluded points in orange.
+- 2026-11-18 (device): "too many panels blocking the AR view". Chosen with the user: mode tabs —
+  one compact bottom panel (single status line, edit pickers only while editing, action row of the
+  active tab, Robot | Scan switch); joints panel behind a toggle next to the connection pill.
+  Switching tabs ends that tab's drag mode. Layout checked in the iOS Simulator (overlay only —
+  no ARKit there).
+- [ ] Device: AR view mostly unobstructed; both tabs usable one-handed
+- 2026-11-18: crosshair at the exact screen centre (where Place and + Exclude raycast from),
+  full-screen like the AR view so the centres coincide — verified in the Simulator; hidden while a
+  drag edits something. "Capture"/"Place" labels no longer wrap: `ViewThatFits` falls back to
+  icon-only when the row is full (e.g. once Edit appears).
+- [ ] Device: crosshair matches where the robot / a new exclusion box appears; Capture never wraps
+- 2026-11-18 (device): app hitches on first ROS connect. dad9ff2 moved the URDF parse off the main
+  actor and stopped the overlay observing every /joint_states — user reports no change. Next:
+  profile the connect on device (Instruments) instead of guessing.
+- [ ] No hitch when connecting to ROS — DEFERRED to the end of the project (user, 2026-11-18)
+- 2026-11-18: robot-filter quality and "upload is green only" need the real robot; the user
+  expects access in the coming weeks. Carried forward as pending real-robot checks (alongside M6).

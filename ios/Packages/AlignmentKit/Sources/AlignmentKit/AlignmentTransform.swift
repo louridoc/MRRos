@@ -51,6 +51,23 @@ public struct AlignmentTransform: Sendable, Equatable {
         return simd_quatf(angle: yaw, axis: SIMD3(0, 1, 0)).act(SIMD3(ar.x, ar.y, ar.z))
     }
 
+    /// A point given in `base_link` (ROS convention), in AR world space.
+    public func worldPoint(fromBaseLink p: SIMD3<Float>) -> SIMD3<Float> {
+        position + worldVector(fromBaseLink: p)
+    }
+
+    /// An AR-world point expressed in `base_link` (ROS convention) — the inverse of
+    /// `worldPoint(fromBaseLink:)`, via the same path `CloudRegistration` uses.
+    public func baseLinkPoint(fromWorld p: SIMD3<Float>) -> SIMD3<Float> {
+        FrameConventions.toROS(point: pointInBaseLink(p))
+    }
+
+    /// The AR-world pose of the `base_link` frame itself, ROS axes and all — for placing
+    /// geometry defined in base_link (e.g. the scan crop box) as an `OrientedBox`.
+    public var worldFromBaseLink: simd_float4x4 {
+        transform * FrameConventions.rosToARFloat
+    }
+
     /// Moves by `delta` expressed in `base_link` axes. Yaw is unchanged, so translating along
     /// base X or Y never changes height; a Z component would.
     public func translatedInBaseLink(by delta: SIMD3<Float>) -> AlignmentTransform {
