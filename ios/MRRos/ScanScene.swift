@@ -15,6 +15,10 @@ final class ScanScene {
     /// Set by the UI; consumed (reset to nil) by the AR coordinator.
     var request: Request?
     var pointCount = 0
+    /// Breakdown of `pointCount` from the last classification: uploaded / robot / cropped out.
+    var keptCount = 0
+    var robotCount = 0
+    var croppedCount = 0
     var isUploading = false
     var status = "Move around, then capture to add what the LiDAR has seen so far."
     var lastUploadSummary: String?

@@ -119,6 +119,11 @@ struct ARContainerView: UIViewRepresentable {
         /// `captureScan`/`uploadScan`). Re-voxelized after every capture so repeated taps don't
         /// make the cloud grow without bound from re-scanning the same surfaces.
         private var scanCloud = PointCloud.empty
+        /// Drawn at a world-fixed anchor so it exists whether or not a robot is placed.
+        private let preview = ScanPreview()
+        /// Matches MoveIt's sensors_3d padding_offset so the phone and MoveIt agree on what
+        /// "the robot" is (MoveIt's filter is exact-mesh, ours is per-link bounding boxes).
+        private static let robotPadding: Float = 0.03
         /// When Clear last asked ARKit to restart its scene mesh — shown on Capture so a device
         /// test can tell whether the reset actually took (a capture right after it should be tiny).
         private var lastMeshReset: Date?
@@ -142,6 +147,9 @@ struct ARContainerView: UIViewRepresentable {
 
         func attach(_ view: ARView) {
             arView = view
+            let previewAnchor = AnchorEntity(world: matrix_identity_float4x4)
+            previewAnchor.addChild(preview.root)
+            view.scene.addAnchor(previewAnchor)
             scene.savedAlignment = alignmentStore?.info()
             updateSubscription = view.scene.subscribe(to: SceneEvents.Update.self) { [weak self] event in
                 self?.tick(dt: event.deltaTime)
@@ -211,6 +219,7 @@ struct ARContainerView: UIViewRepresentable {
                 lastStamp = nil
                 scene.isBuilding = false
                 scene.isPlaced = true
+                refreshPreview()
                 scene.placedRobotName = urdf.name
                 scene.placeholders = entity.placeholders
                 let verb = restored ? "restored — check it overlays the real robot" : "placed"
@@ -402,6 +411,7 @@ struct ARContainerView: UIViewRepresentable {
                 wasAligning = scene.isAligning
                 if finishedAligning {
                     saveAlignment()
+                    refreshPreview()
                 }
                 gizmo?.root.isEnabled = scene.isAligning
                 // Translucent robot so the triad at the base reads through it. Occlusion off while
@@ -524,10 +534,12 @@ struct ARContainerView: UIViewRepresentable {
             scanCloud.append(batch)
             scanCloud = VoxelFilter.downsample(scanCloud, voxelSize: scanVoxelSize)
             scanScene.pointCount = scanCloud.count
+            refreshPreview()
             let vertices = meshAnchors.reduce(0) { $0 + $1.geometry.vertices.count }
             let since = lastMeshReset.map { String(format: " · mesh reset %.0f s ago", Date().timeIntervalSince($0)) } ?? ""
-            scanScene.status = "\(scanCloud.count) points scanned so far "
-                + "(\(meshAnchors.count) ARKit mesh pieces, \(vertices) vertices\(since))."
+            scanScene.status = "\(scanScene.keptCount) to upload, \(scanScene.robotCount) robot, "
+                + "\(scanScene.croppedCount) cropped (\(meshAnchors.count) ARKit mesh pieces, "
+                + "\(vertices) vertices\(since))."
             log.info("capture: \(meshAnchors.count) mesh anchors, \(vertices) vertices, total \(self.scanCloud.count)\(since, privacy: .public)")
         }
 
@@ -569,6 +581,8 @@ struct ARContainerView: UIViewRepresentable {
                 log.info("scene reconstruction reset requested")
             }
             scanCloud = .empty
+            preview.clear()
+            (scanScene.keptCount, scanScene.robotCount, scanScene.croppedCount) = (0, 0, 0)
             scanScene.pointCount = 0
             scanScene.lastUploadSummary = nil
             scanScene.status = "Scan cleared. Move around, then capture again."
@@ -605,13 +619,19 @@ struct ARContainerView: UIViewRepresentable {
             // lands in base_link where the gizmo says the robot actually is. Recomputed from
             // whatever the CURRENT alignment is at upload time, not baked in at capture time,
             // so re-aligning doesn't require re-scanning.
+            let classes = classifyScan()
+            let kept = scanCloud.selecting(classes, equalTo: .kept)
+            guard !kept.isEmpty else {
+                scanScene.status = "Nothing left to upload — every point was filtered out (robot/crop)."
+                return
+            }
             let frameId: String
             let toUpload: PointCloud
             if let alignment {
-                toUpload = CloudRegistration.registering(scanCloud, against: alignment)
+                toUpload = CloudRegistration.registering(kept, against: alignment)
                 frameId = "base_link"
             } else {
-                toUpload = CloudRegistration.rotatedToROSAxes(scanCloud)
+                toUpload = CloudRegistration.rotatedToROSAxes(kept)
                 frameId = "map"
                 scanScene.status = "No robot placed — uploading unregistered (frame \"map\")."
             }
@@ -636,6 +656,39 @@ struct ARContainerView: UIViewRepresentable {
                 }
                 scanScene.isUploading = false
             }
+        }
+
+        // MARK: Scan filtering (M5b)
+
+        /// One box per robot link: its meshes' bounds in the link's own frame, placed at the pose
+        /// the AR robot has right now (the real robot doesn't move during a scan). Coarser than
+        /// MoveIt's exact-mesh self-filter — it also takes a little around each link — which is
+        /// fine: MoveIt still filters exactly, and this makes the phone's own output clean for
+        /// any other planner.
+        private func robotBoxes() -> [OrientedBox] {
+            guard let robot else { return [] }
+            return robot.linkEntities.values.compactMap { link in
+                let bounds = link.visualBounds(recursive: true, relativeTo: link)
+                guard !bounds.isEmpty else { return nil }
+                return OrientedBox(
+                    worldFromBox: link.transformMatrix(relativeTo: nil), min: bounds.min, max: bounds.max
+                )
+            }
+        }
+
+        private func classifyScan() -> [PointClass] {
+            SceneFilter.classify(scanCloud, crop: nil, robot: robotBoxes(), robotPadding: Self.robotPadding)
+        }
+
+        /// Re-classify and redraw — after a capture, and whenever the robot moves in the world
+        /// (placed, re-placed, aligned), since that changes which points are "robot".
+        private func refreshPreview() {
+            guard !scanCloud.isEmpty else { return }
+            let classes = classifyScan()
+            preview.show(scanCloud, classes: classes)
+            scanScene.keptCount = classes.count(where: { $0 == .kept })
+            scanScene.robotCount = classes.count(where: { $0 == .robot })
+            scanScene.croppedCount = classes.count(where: { $0 == .outsideCrop })
         }
 
         // MARK: Per-frame
