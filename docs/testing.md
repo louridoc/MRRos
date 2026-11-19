@@ -409,3 +409,16 @@ Findings log:
   ARKit mesh pieces/vertices and time since the reset. Device-confirmed: reset runs; a capture after
   Clear contains only what the camera has seen since (ARKit meshes continuously, so "since Clear"
   includes everything swept past — choosing a region is M5b's crop box).
+
+## M5b — Scan preview, robot filter, crop
+Automated: `tools/ios-test.sh LiDARScan` — `OrientedBox` containment (padding, translation,
+rotation), `SceneFilter.classify` (robot wins over crop, no-crop/no-robot keeps all, padding),
+`PointCloud.selecting` keeps columns aligned.
+
+Findings log:
+- 2026-11-18 (device): preview points appeared away from where they were captured ("to my left
+  and back") while the same scan uploaded correctly to RViz. The preview's world anchor was made
+  once at app launch; RealityKit backs world anchors with ARKit anchors, and a restore
+  (`.resetTracking, .removeExistingAnchors`) moves the world frame and drops them, stranding the
+  preview by exactly that jump. Now re-created on every redraw (same lifetime as the robot's).
+  Device: "way better".

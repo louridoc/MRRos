@@ -121,6 +121,11 @@ struct ARContainerView: UIViewRepresentable {
         private var scanCloud = PointCloud.empty
         /// Drawn at a world-fixed anchor so it exists whether or not a robot is placed.
         private let preview = ScanPreview()
+        /// Re-created on every redraw, never kept from app start: RealityKit backs world anchors
+        /// with ARKit anchors, and a restore (`.resetTracking, .removeExistingAnchors`) moves the
+        /// world frame and drops them — an anchor made at launch left the preview displaced by
+        /// exactly that jump. Same lifetime rule as the robot's anchor.
+        private var previewAnchor: AnchorEntity?
         /// Matches MoveIt's sensors_3d padding_offset so the phone and MoveIt agree on what
         /// "the robot" is (MoveIt's filter is exact-mesh, ours is per-link bounding boxes).
         private static let robotPadding: Float = 0.03
@@ -147,9 +152,6 @@ struct ARContainerView: UIViewRepresentable {
 
         func attach(_ view: ARView) {
             arView = view
-            let previewAnchor = AnchorEntity(world: matrix_identity_float4x4)
-            previewAnchor.addChild(preview.root)
-            view.scene.addAnchor(previewAnchor)
             scene.savedAlignment = alignmentStore?.info()
             updateSubscription = view.scene.subscribe(to: SceneEvents.Update.self) { [weak self] event in
                 self?.tick(dt: event.deltaTime)
@@ -685,6 +687,13 @@ struct ARContainerView: UIViewRepresentable {
         private func refreshPreview() {
             guard !scanCloud.isEmpty else { return }
             let classes = classifyScan()
+            if let arView {
+                previewAnchor.map { arView.scene.removeAnchor($0) }
+                let anchor = AnchorEntity(world: matrix_identity_float4x4)
+                anchor.addChild(preview.root)
+                arView.scene.addAnchor(anchor)
+                previewAnchor = anchor
+            }
             preview.show(scanCloud, classes: classes)
             scanScene.keptCount = classes.count(where: { $0 == .kept })
             scanScene.robotCount = classes.count(where: { $0 == .robot })
