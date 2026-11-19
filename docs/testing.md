@@ -470,4 +470,6 @@ Findings log:
 - 2026-11-18 (device): app hitches on first ROS connect. dad9ff2 moved the URDF parse off the main
   actor and stopped the overlay observing every /joint_states — user reports no change. Next:
   profile the connect on device (Instruments) instead of guessing.
-- [ ] No hitch when connecting to ROS
+- [ ] No hitch when connecting to ROS — DEFERRED to the end of the project (user, 2026-11-18)
+- 2026-11-18: robot-filter quality and "upload is green only" need the real robot; the user
+  expects access in the coming weeks. Carried forward as pending real-robot checks (alongside M6).
