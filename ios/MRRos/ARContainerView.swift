@@ -34,7 +34,10 @@ struct ARContainerView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> ARView {
-        let view = ARView(frame: .zero)
+        // We configure and run the session ourselves (scene reconstruction, scene depth,
+        // restores, mesh resets); RealityKit's automatic configuration would otherwise re-run it
+        // with its own config whenever sceneUnderstanding options change (e.g. entering align mode).
+        let view = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
         view.environment.sceneUnderstanding.options = [.occlusion]
         view.debugOptions = [.showWorldOrigin]
         view.session.run(Self.makeConfiguration())
@@ -116,6 +119,9 @@ struct ARContainerView: UIViewRepresentable {
         /// `captureScan`/`uploadScan`). Re-voxelized after every capture so repeated taps don't
         /// make the cloud grow without bound from re-scanning the same surfaces.
         private var scanCloud = PointCloud.empty
+        /// When Clear last asked ARKit to restart its scene mesh — shown on Capture so a device
+        /// test can tell whether the reset actually took (a capture right after it should be tiny).
+        private var lastMeshReset: Date?
         private let scanVoxelSize: Float = 0.02
 
         /// Built fresh per placement from the session's CURRENT host, so a reconnect to a
@@ -518,7 +524,11 @@ struct ARContainerView: UIViewRepresentable {
             scanCloud.append(batch)
             scanCloud = VoxelFilter.downsample(scanCloud, voxelSize: scanVoxelSize)
             scanScene.pointCount = scanCloud.count
-            scanScene.status = "\(scanCloud.count) points scanned so far."
+            let vertices = meshAnchors.reduce(0) { $0 + $1.geometry.vertices.count }
+            let since = lastMeshReset.map { String(format: " · mesh reset %.0f s ago", Date().timeIntervalSince($0)) } ?? ""
+            scanScene.status = "\(scanCloud.count) points scanned so far "
+                + "(\(meshAnchors.count) ARKit mesh pieces, \(vertices) vertices\(since))."
+            log.info("capture: \(meshAnchors.count) mesh anchors, \(vertices) vertices, total \(self.scanCloud.count)\(since, privacy: .public)")
         }
 
         private static func worldVertices(of meshAnchor: ARMeshAnchor) -> [SIMD3<Float>] {
@@ -548,11 +558,15 @@ struct ARContainerView: UIViewRepresentable {
         /// the world frame, the alignment and the placed robot all stay valid. Off for the restore
         /// path, which has just re-run the session from the saved map itself.
         private func clearScan(resetReconstruction: Bool = true) {
-            if resetReconstruction, let arView,
-               let config = arView.session.configuration?.copy() as? ARWorldTrackingConfiguration
-            {
+            if resetReconstruction, let arView {
+                // Prefer the running config (keeps everything it has); never skip the reset just
+                // because it can't be read back — rebuild ours instead.
+                let config = (arView.session.configuration?.copy() as? ARWorldTrackingConfiguration)
+                    ?? ARContainerView.makeConfiguration()
                 config.initialWorldMap = nil // don't trigger a second relocalization
                 arView.session.run(config, options: [.resetSceneReconstruction])
+                lastMeshReset = Date()
+                log.info("scene reconstruction reset requested")
             }
             scanCloud = .empty
             scanScene.pointCount = 0

@@ -399,4 +399,13 @@ Findings log:
   `DELETE /v0/cloud` (drops stored scan, clears MoveIt's octomap, publishes an empty latched cloud)
   and the app's Clear calls it. Verified live: blocked pose free again, latched topic width 0, and
   MoveIt's /monitored_planning_scene broadcast (what RViz draws) goes from a 283 KB octomap to empty.
-- [ ] Device: press Clear in the app → RViz's octomap empties without uploading
+- [x] Device: press Clear in the app → RViz's octomap empties without uploading (2026-11-18)
+- 2026-11-18 (device test, second follow-up): after Clear, a capture 5 s later still had ~19k
+  points — the ARKit mesh reset wasn't happening. It only ran if `session.configuration` could be
+  read back as a world-tracking config, and silently skipped otherwise; RealityKit's default
+  `automaticallyConfigureSession` also re-runs the session with its own config (e.g. when align
+  mode toggles occlusion). Fixed: ARView created with `automaticallyConfigureSession: false`, and the
+  reset falls back to our own `makeConfiguration()` instead of skipping. Capture's status now shows
+  ARKit mesh pieces/vertices and time since the reset. Device-confirmed: reset runs; a capture after
+  Clear contains only what the camera has seen since (ARKit meshes continuously, so "since Clear"
+  includes everything swept past — choosing a region is M5b's crop box).
