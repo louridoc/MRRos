@@ -6,6 +6,14 @@ Parameters:
   output_dir (string)    where .pcd/.ply files are written, default ~/.mrros/clouds
   mesh_cache_dir (string) where converted .obj meshes are cached, default ~/.mrros/mesh_cache
   scenes_dir (string)    saved-scene library (M5c), default ~/.mrros/scenes
+  collision_object_id (string) MoveIt collision object holding the scan mesh,
+                         default mrros_scan_mesh
+  apply_planning_scene_service (string) default /apply_planning_scene; "none" disables meshes
+  planning_scene_topic (string) watched for a (re)started move_group to re-send the mesh,
+                         default /planning_scene
+  republish_after_s (float) send each scan once more this long after publishing, default 1.5;
+                         MoveIt's updater drops clouds arriving within 1/max_update_rate (1 s)
+                         of the previous one (e.g. right after a Clear). < 0 disables
   late_join_delay_s (float) wait after a new volatile subscriber (e.g. a restarted move_group)
                          before re-publishing the last scan to it, default 3.0; < 0 disables
 """
@@ -24,7 +32,9 @@ from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import PointCloud2
 from std_srvs.srv import Empty
 
+from ar_bridge import mesh_ply
 from ar_bridge.cloud import build_point_cloud2, ingest
+from ar_bridge.collision import apply_request, collision_object, moveit_available
 from ar_bridge.http_api import Handlers, MeshResult, make_app
 from ar_bridge.late_join import LateJoinWatcher
 from ar_bridge.mesh_resolver import MeshCache, resolve_mesh
@@ -50,7 +60,11 @@ class ARBridge(Node):
         # upload REPLACES the scene there too. "" or "none" disables. No-op without MoveIt.
         self.declare_parameter("clear_octomap_service", "/clear_octomap")
         self.declare_parameter("late_join_delay_s", 3.0)
+        self.declare_parameter("republish_after_s", 1.5)
         self.declare_parameter("scenes_dir", os.path.expanduser("~/.mrros/scenes"))
+        self.declare_parameter("collision_object_id", "mrros_scan_mesh")
+        self.declare_parameter("apply_planning_scene_service", "/apply_planning_scene")
+        self.declare_parameter("planning_scene_topic", "/planning_scene")
 
         self.port = int(self.get_parameter("http_port").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
@@ -68,8 +82,31 @@ class ARBridge(Node):
         # The last non-empty cloud published, for subscribers that join late. Set from the HTTP
         # thread, read on the rclpy thread: a single reference swap, so no lock needed.
         self._last_cloud: PointCloud2 | None = None
+        self._republish_after = float(self.get_parameter("republish_after_s").value)
+        # Bumped whenever the CONTENT changes (upload, scene publish, Clear): a pending re-send
+        # of older content is dropped. Re-sends of the same scan never clear the octomap.
+        self._publish_generation = 0
+        # (due time, generation) of the follow-up to a late-joiner re-send (rclpy thread).
+        self._late_followup: tuple[float, int] | None = None
         delay = float(self.get_parameter("late_join_delay_s").value)
         self._late_join = LateJoinWatcher(delay) if delay >= 0 else None
+
+        # Scan mesh -> MoveIt collision object (M5c). Needs moveit_msgs; without it the mesh
+        # endpoint answers 501 and everything else works as before.
+        self.collision_object_id = str(self.get_parameter("collision_object_id").value)
+        self.planning_scene_topic = str(self.get_parameter("planning_scene_topic").value)
+        apply_srv = str(self.get_parameter("apply_planning_scene_service").value)
+        self._apply_scene = None
+        if apply_srv.strip().lower() not in ("", "none") and moveit_available():
+            from moveit_msgs.srv import ApplyPlanningScene
+
+            self._apply_scene = self.create_client(ApplyPlanningScene, apply_srv)
+        # The last mesh applied, re-sent to a (re)started move_group; None after a Clear.
+        self._last_mesh: mesh_ply.DecodedMesh | None = None
+        self._mesh_frame = self.frame_id
+        self._mesh_join = LateJoinWatcher(delay) if delay >= 0 else None
+        self._mesh_resend_pending = False
+
         if self._late_join is not None:
             self.create_timer(1.0, self._check_late_joiners)
 
@@ -81,6 +118,7 @@ class ARBridge(Node):
             on_clear=self._on_clear,
             scenes=self.scenes,
             on_publish_scene=self._on_publish_scene,
+            on_scene_mesh=self._on_scene_mesh if self._apply_scene is not None else None,
         )
         distro = os.environ.get("ROS_DISTRO", "?")
         self.get_logger().info(
@@ -155,6 +193,11 @@ class ARBridge(Node):
         cleared = await self._clear_moveit_octomap()
         self.cloud_pub.publish(result.message)
         self._last_cloud = result.message
+        self._publish_generation += 1
+        if self._republish_after >= 0:
+            asyncio.get_running_loop().create_task(
+                self._republish_later(self._publish_generation, result.message)
+            )
         self.get_logger().info(
             f"cloud '{name}' ({label}): {result.point_count} pts -> {self.cloud_topic}, "
             f"{result.pcd_path}{' (MoveIt octomap cleared first)' if cleared else ''}"
@@ -180,6 +223,14 @@ class ARBridge(Node):
         cleared = await self._clear_moveit_octomap()
         self.cloud_pub.publish(empty)
         self._last_cloud = None  # a late joiner starts empty anyway; nothing to re-send
+        self._publish_generation += 1  # cancels a pending re-send of the cleared scan
+        mesh_removed = False
+        if self._last_mesh is not None and self._apply_scene is not None:
+            self._last_mesh = None
+            remove = collision_object(
+                None, frame_id=self._mesh_frame, object_id=self.collision_object_id
+            )
+            mesh_removed = await self._apply(remove, timeout_s=5.0)
         self.get_logger().info(
             f"cleared {name or 'all clouds'} -> empty {self.cloud_topic}"
             f"{' (MoveIt octomap cleared)' if cleared else ''}"
@@ -188,7 +239,64 @@ class ARBridge(Node):
             "cleared": name or "all",
             "topic": self.cloud_topic,
             "moveit_octomap_cleared": cleared,
+            "moveit_mesh_removed": mesh_removed,
         }
+
+    async def _republish_later(self, generation: int, message: PointCloud2) -> None:
+        """Measured (M5c): Clear then upload within a second, and MoveIt's updater (1 Hz) dropped
+        the scan; the octomap stayed empty. One more send after the throttle window makes the
+        latest scan land; skipped if anything newer was published or cleared meanwhile."""
+        await asyncio.sleep(self._republish_after)
+        if generation == self._publish_generation:
+            self.cloud_pub.publish(message)
+
+    async def _on_scene_mesh(self, body: bytes, meta: dict[str, str]) -> dict:
+        """POST /v0/scene_mesh: the app's filtered scan mesh -> one MoveIt collision object
+        (replaced on every upload, removed by Clear, re-sent if move_group restarts). Unlike the
+        cloud, MoveIt does NOT self-filter collision objects: the phone must have removed the
+        robot's triangles, or the start state is in collision."""
+        frame_id = meta.get("frame_id")
+        if not frame_id:
+            raise PLYError(400, "missing ?frame_id=...")
+        loop = asyncio.get_running_loop()
+        mesh = await loop.run_in_executor(None, mesh_ply.decode, body)
+        obj = await loop.run_in_executor(
+            None,
+            lambda: collision_object(mesh, frame_id=frame_id, object_id=self.collision_object_id),
+        )
+        self._last_mesh, self._mesh_frame = mesh, frame_id
+        applied = await self._apply(obj, timeout_s=30.0)
+        self.get_logger().info(
+            f"scan mesh: {len(mesh.triangles)} triangles -> collision object "
+            f"'{self.collision_object_id}' "
+            f"({'applied' if applied else 'MoveIt not up; kept for later'})"
+        )
+        return {
+            "triangles": int(len(mesh.triangles)),
+            "vertices": int(len(mesh.vertices)),
+            "object_id": self.collision_object_id,
+            "applied": applied,
+        }
+
+    async def _apply(self, obj, *, timeout_s: float) -> bool:
+        """ApplyPlanningScene from the asyncio thread; False if MoveIt isn't up or fails."""
+        if self._apply_scene is None or not self._apply_scene.service_is_ready():
+            return False
+        future = self._apply_scene.call_async(apply_request(obj))
+        if not await self._wait(future, timeout_s):
+            self.get_logger().warning("apply_planning_scene timed out")
+            return False
+        return bool(future.result().success)
+
+    @staticmethod
+    async def _wait(future, timeout_s: float) -> bool:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        while not future.done():
+            if loop.time() > deadline:
+                return False
+            await asyncio.sleep(0.02)
+        return True
 
     async def _clear_moveit_octomap(self, timeout_s: float = 2.0) -> bool:
         """Clears MoveIt's octomap if move_group is up. Every published cloud is the complete
@@ -198,13 +306,9 @@ class ARBridge(Node):
         if self._clear_octomap is None or not self._clear_octomap.service_is_ready():
             return False
         future = self._clear_octomap.call_async(Empty.Request())
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout_s
-        while not future.done():
-            if loop.time() > deadline:
-                self.get_logger().warning("clear_octomap timed out; publishing anyway")
-                return False
-            await asyncio.sleep(0.02)
+        if not await self._wait(future, timeout_s):
+            self.get_logger().warning("clear_octomap timed out; publishing anyway")
+            return False
         return True
 
     def _check_late_joiners(self) -> None:
@@ -213,6 +317,7 @@ class ARBridge(Node):
         Clearing the octomap first keeps an already-running MoveIt from double-inserting it."""
         assert self._late_join is not None
         now = self.get_clock().now().nanoseconds / 1e9
+        self._check_mesh_joiners(now)
         volatile = [
             tuple(info.endpoint_gid)
             for info in self.get_subscriptions_info_by_topic(self.cloud_topic)
@@ -223,21 +328,47 @@ class ARBridge(Node):
                 f"new volatile subscriber on {self.cloud_topic}; re-publishing the last scan in "
                 f"{self._late_join.delay_s:.0f} s"
             )
+        if self._late_followup is not None and now >= self._late_followup[0]:
+            generation = self._late_followup[1]
+            self._late_followup = None
+            if generation == self._publish_generation and self._last_cloud is not None:
+                self.cloud_pub.publish(self._last_cloud)
         if not self._late_join.due(now) or self._last_cloud is None:
             return
-        cloud = self._last_cloud
+        # Same scan again: no octomap clear (that would wipe a copy MoveIt already has and the
+        # re-send may then be throttled away — measured). Its own follow-up covers the throttle.
+        self.cloud_pub.publish(self._last_cloud)
+        if self._republish_after >= 0:
+            self._late_followup = (now + self._republish_after, self._publish_generation)
+        self.get_logger().info(
+            f"re-published last scan ({self._last_cloud.width} pts) for a late subscriber"
+        )
 
-        def publish(_future: object = None) -> None:
-            self.cloud_pub.publish(cloud)
-            self.get_logger().info(
-                f"re-published last scan ({cloud.width} pts) for a late subscriber"
+    def _check_mesh_joiners(self, now: float) -> None:
+        """A (re)started move_group has an empty world: re-apply the last scan mesh once its
+        planning-scene subscription appears and the service answers."""
+        if self._mesh_join is None or self._apply_scene is None:
+            return
+        ids = [
+            tuple(i.endpoint_gid)
+            for i in self.get_subscriptions_info_by_topic(self.planning_scene_topic)
+        ]
+        self._mesh_join.observe(now, ids)
+        if self._mesh_join.due(now) and self._last_mesh is not None:
+            self._mesh_resend_pending = True
+        if not self._mesh_resend_pending or not self._apply_scene.service_is_ready():
+            return
+        self._mesh_resend_pending = False
+        mesh, frame = self._last_mesh, self._mesh_frame
+        if mesh is None:
+            return
+        obj = collision_object(mesh, frame_id=frame, object_id=self.collision_object_id)
+        self._apply_scene.call_async(apply_request(obj)).add_done_callback(
+            lambda f: self.get_logger().info(
+                f"re-applied scan mesh ({len(mesh.triangles)} triangles) for a (re)started "
+                f"move_group: {'ok' if f.result() and f.result().success else 'FAILED'}"
             )
-
-        # Asynchronous: blocking here would stall the executor that has to deliver the reply.
-        if self._clear_octomap is not None and self._clear_octomap.service_is_ready():
-            self._clear_octomap.call_async(Empty.Request()).add_done_callback(publish)
-        else:
-            publish()
+        )
 
     def serve_forever(self) -> None:
         app = make_app(self.handlers, node_name=self.get_name())

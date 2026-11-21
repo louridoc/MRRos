@@ -26,6 +26,7 @@ OVERRIDES: dict[str, type] = {
     "mesh_cache_dir": str,
     "clear_octomap_service": str,
     "late_join_delay_s": float,
+    "republish_after_s": float,
 }
 
 # Sentinel default meaning "not given": "" is a meaningful value for clear_octomap_service.

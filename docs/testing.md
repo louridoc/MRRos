@@ -497,3 +497,11 @@ Findings log:
       overrides (`scenes_dir`, `http_port`, `clear_octomap_service:=none`), a custom yaml with `~`,
       and the dev bringup's `scenes_dir:=` passthrough. (`ros2 launch` rejects empty `name:=`,
       hence `none` to disable clearing.)
+- [x] Part 3a, scan mesh → MoveIt collision object (2026-11-21, Mac): `moveit_scene_check.py --mesh`
+      (wall as 12 triangles) passes on UR10e and CRX-30iA incl. execute; restart move_group →
+      mesh re-applied, plan avoids it; `--clear-after` → Clear removes it.
+- [x] Found while testing 3a and fixed (measured from logs): Clear then upload within 1 s left the
+      octomap EMPTY — MoveIt's updater (max_update_rate 1 Hz) dropped the scan after the Clear's
+      empty cloud, and the late-join re-send cleared the octomap and was throttled too. Now: one
+      re-send 1.5 s after every publish; re-sends never clear. Verified: 2 fresh CRX starts × (3
+      points + 1 mesh) all pass, first upload right after start included; UR10e restart still OK.

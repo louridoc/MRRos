@@ -33,6 +33,8 @@ class Handlers:
     # and the node's "filter + publish this stored scene".
     scenes: Any = None
     on_publish_scene: Callable[[str], Awaitable[dict]] | None = None
+    # M5c scan mesh -> MoveIt collision object (None without moveit_msgs: 501).
+    on_scene_mesh: Callable[[bytes, dict[str, str]], Awaitable[dict]] | None = None
 
 
 def _error_response(e: Exception) -> web.Response:
@@ -88,6 +90,16 @@ def make_app(handlers: Handlers, *, node_name: str = "ar_bridge") -> web.Applica
             return _error_response(e)
         return web.Response(body=data, content_type=content_type, headers={"X-Mesh-SHA256": sha256})
 
+    async def scene_mesh(request: web.Request) -> web.Response:
+        if handlers.on_scene_mesh is None:
+            raise web.HTTPNotImplemented(reason="scan mesh needs moveit_msgs on this machine")
+        body = await request.read()
+        try:
+            result = await handlers.on_scene_mesh(body, dict(request.query.items()))
+        except Exception as e:
+            return _error_response(e)
+        return web.json_response(result)
+
     def _scenes() -> Any:
         if handlers.scenes is None:
             raise web.HTTPNotImplemented(reason="scene library not wired")
@@ -131,6 +143,7 @@ def make_app(handlers: Handlers, *, node_name: str = "ar_bridge") -> web.Applica
 
     app.add_routes(
         [
+            web.post("/v0/scene_mesh", scene_mesh),
             web.get("/v0/scenes", list_scenes),
             web.get("/v0/scenes/{id}/{file}", get_scene_file),
             web.put("/v0/scenes/{id}/{file}", put_scene_file),
