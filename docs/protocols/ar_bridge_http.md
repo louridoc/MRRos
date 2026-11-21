@@ -33,6 +33,12 @@ Errors: `400` malformed PLY (bad magic/format/header, unsupported property order
 body) or missing/invalid `frame_id`/`mode`; `413` body over `client_max_size` (256 MiB, enforced
 by aiohttp before the handler runs).
 
+**Late subscribers (M5c).** The topic is latched, but MoveIt's octomap updater subscribes
+VOLATILE, so a move_group that starts or restarts after an upload would never get it. ar_bridge
+polls the topic's volatile subscriptions (1 Hz); when a new one appears it waits
+`late_join_delay_s` (default 3 s, < 0 disables) for MoveIt's TF and robot state, clears the octomap
+and re-publishes the last scan. Nothing to re-send after a Clear.
+
 ## DELETE /v0/cloud  (M5)
 The app's **Clear**. Query: `name` (optional — clears that accumulator; without it, all),
 `frame_id` (optional, for the empty message; default the node's `frame_id`).
@@ -71,3 +77,4 @@ when no manifest entry names the file explicitly.
   `501` dropped from its error set now that it's wired; `mode=append`'s accumulation key and
   backfill semantics specified above once actually built, instead of left open in the draft.
 - v0 (2026-11-18): `DELETE /v0/cloud` added; uploads clear MoveIt's octomap first; cloud stamp 0.
+- v0 (2026-11-21): last scan re-published to late VOLATILE subscribers (move_group (re)start).

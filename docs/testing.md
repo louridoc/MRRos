@@ -473,3 +473,11 @@ Findings log:
 - [ ] No hitch when connecting to ROS — DEFERRED to the end of the project (user, 2026-11-18)
 - 2026-11-18: robot-filter quality and "upload is green only" need the real robot; the user
   expects access in the coming weeks. Carried forward as pending real-robot checks (alongside M6).
+
+## M5c — scenes + adapters
+
+- [x] Part 1, MoveIt late join (2026-11-21, Mac, UR10e, isolated domain 42): upload, restart
+      move_group, `moveit_scene_check.py --no-upload --settle 8` → wall present, self-filter OK,
+      plan avoids it. Baseline on the old ar_bridge: **FAIL** (restarted move_group had no wall,
+      plan went through it). ar_bridge logs "new volatile subscriber … re-publishing in 3 s".
+      Unit tests: `test_late_join.py`.

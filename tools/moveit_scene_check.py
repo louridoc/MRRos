@@ -198,6 +198,12 @@ def main() -> int:
         default=0.0,
         help="optional wait after MoveIt's services appear before uploading",
     )
+    ap.add_argument(
+        "--no-upload",
+        action="store_true",
+        help="check the scene MoveIt already has (no clear, no upload) — e.g. after restarting "
+        "move_group, to test that ar_bridge re-published the last scan to it",
+    )
     args = ap.parse_args()
     spec = ROBOTS[args.robot]
 
@@ -245,20 +251,23 @@ def main() -> int:
     arm_az = math.atan2(reach[:, 1].mean(), reach[:, 0].mean())
     print(f"sampled {len(robot)} points on the robot's collision surfaces")
 
-    # The octomap accumulates across clouds: start from empty so earlier runs can't leak in.
-    node.call(node.clear, Empty.Request())
     results = {}
-    results["halfway valid before upload"] = node.valid(halfway)
+    if args.no_upload:
+        print("--no-upload: checking the scene MoveIt already has")
+    else:
+        # The octomap accumulates across clouds: start from empty so earlier runs can't leak in.
+        node.call(node.clear, Empty.Request())
+        results["halfway valid before upload"] = node.valid(halfway)
 
-    pts = np.concatenate([wall(arm_az, side), robot]).astype(np.float32)
-    req = urllib.request.Request(
-        f"{args.ar_bridge}/v0/cloud?frame_id=base_link&name=moveit_check",
-        data=ply.encode(pts),
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        print("uploaded:", resp.read().decode())
-    time.sleep(3.0)  # updater runs at max_update_rate 1 Hz
+        pts = np.concatenate([wall(arm_az, side), robot]).astype(np.float32)
+        req = urllib.request.Request(
+            f"{args.ar_bridge}/v0/cloud?frame_id=base_link&name=moveit_check",
+            data=ply.encode(pts),
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            print("uploaded:", resp.read().decode())
+        time.sleep(3.0)  # updater runs at max_update_rate 1 Hz
 
     results["halfway IN COLLISION after upload"] = not node.valid(halfway)
     results["start still valid (self-filter)"] = node.valid(start)

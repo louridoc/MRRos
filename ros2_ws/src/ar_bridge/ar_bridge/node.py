@@ -5,6 +5,8 @@ Parameters:
   frame_id (string)      frame the published cloud is expressed in, default base_link
   output_dir (string)    where .pcd/.ply files are written, default ~/.mrros/clouds
   mesh_cache_dir (string) where converted .obj meshes are cached, default ~/.mrros/mesh_cache
+  late_join_delay_s (float) wait after a new volatile subscriber (e.g. a restarted move_group)
+                         before re-publishing the last scan to it, default 3.0; < 0 disables
 """
 
 import asyncio
@@ -23,6 +25,7 @@ from std_srvs.srv import Empty
 
 from ar_bridge.cloud import build_point_cloud2, ingest
 from ar_bridge.http_api import Handlers, MeshResult, make_app
+from ar_bridge.late_join import LateJoinWatcher
 from ar_bridge.mesh_resolver import MeshCache, resolve_mesh
 from ar_bridge.ply import DecodedCloud, PLYError, decode, merge
 
@@ -44,6 +47,7 @@ class ARBridge(Node):
         # MoveIt's octomap only ever adds what it's sent; clear it before each publish so an
         # upload REPLACES the scene there too. Empty string disables. No-op without MoveIt.
         self.declare_parameter("clear_octomap_service", "/clear_octomap")
+        self.declare_parameter("late_join_delay_s", 3.0)
 
         self.port = int(self.get_parameter("http_port").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
@@ -56,6 +60,13 @@ class ARBridge(Node):
         self._clear_octomap = self.create_client(Empty, clear_srv) if clear_srv else None
         # One accumulator per `name` (mode=append target); see docs/protocols/ar_bridge_http.md.
         self._clouds: dict[str, DecodedCloud] = {}
+        # The last non-empty cloud published, for subscribers that join late. Set from the HTTP
+        # thread, read on the rclpy thread: a single reference swap, so no lock needed.
+        self._last_cloud: PointCloud2 | None = None
+        delay = float(self.get_parameter("late_join_delay_s").value)
+        self._late_join = LateJoinWatcher(delay) if delay >= 0 else None
+        if self._late_join is not None:
+            self.create_timer(1.0, self._check_late_joiners)
 
         # M3's on_cloud and M2b's get_mesh are both live.
         self.handlers = Handlers(
@@ -110,6 +121,7 @@ class ARBridge(Node):
         )
         cleared = await self._clear_moveit_octomap()
         self.cloud_pub.publish(result.message)
+        self._last_cloud = result.message
         self.get_logger().info(
             f"cloud '{name}' ({mode}): {result.point_count} pts -> {self.cloud_topic}, "
             f"{result.pcd_path}{' (MoveIt octomap cleared first)' if cleared else ''}"
@@ -134,6 +146,7 @@ class ARBridge(Node):
         empty = build_point_cloud2(DecodedCloud.empty(), frame_id=frame_id, stamp=Time())
         cleared = await self._clear_moveit_octomap()
         self.cloud_pub.publish(empty)
+        self._last_cloud = None  # a late joiner starts empty anyway; nothing to re-send
         self.get_logger().info(
             f"cleared {name or 'all clouds'} -> empty {self.cloud_topic}"
             f"{' (MoveIt octomap cleared)' if cleared else ''}"
@@ -160,6 +173,38 @@ class ARBridge(Node):
                 return False
             await asyncio.sleep(0.02)
         return True
+
+    def _check_late_joiners(self) -> None:
+        """rclpy timer (1 Hz). Latched subscribers (RViz) already got the last cloud; volatile
+        ones (MoveIt's octomap updater) didn't, so re-publish to them once they've settled.
+        Clearing the octomap first keeps an already-running MoveIt from double-inserting it."""
+        assert self._late_join is not None
+        now = self.get_clock().now().nanoseconds / 1e9
+        volatile = [
+            tuple(info.endpoint_gid)
+            for info in self.get_subscriptions_info_by_topic(self.cloud_topic)
+            if info.qos_profile.durability != QoSDurabilityPolicy.TRANSIENT_LOCAL
+        ]
+        if self._late_join.observe(now, volatile):
+            self.get_logger().info(
+                f"new volatile subscriber on {self.cloud_topic}; re-publishing the last scan in "
+                f"{self._late_join.delay_s:.0f} s"
+            )
+        if not self._late_join.due(now) or self._last_cloud is None:
+            return
+        cloud = self._last_cloud
+
+        def publish(_future: object = None) -> None:
+            self.cloud_pub.publish(cloud)
+            self.get_logger().info(
+                f"re-published last scan ({cloud.width} pts) for a late subscriber"
+            )
+
+        # Asynchronous: blocking here would stall the executor that has to deliver the reply.
+        if self._clear_octomap is not None and self._clear_octomap.service_is_ready():
+            self._clear_octomap.call_async(Empty.Request()).add_done_callback(publish)
+        else:
+            publish()
 
     def serve_forever(self) -> None:
         app = make_app(self.handlers, node_name=self.get_name())
