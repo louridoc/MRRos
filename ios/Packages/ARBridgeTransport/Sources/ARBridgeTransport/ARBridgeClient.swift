@@ -123,6 +123,78 @@ public struct ARBridgeClient: Sendable {
         }
     }
 
+    // MARK: - Scene library (M5c) — see docs/protocols/ar_bridge_http.md
+
+    /// `GET /v0/scenes`, newest first.
+    public func listScenes() async throws -> [RemoteSceneSummary] {
+        let url = try makeURL(path: "/v0/scenes", queryItems: [])
+        let response = try await perform { try await transport.get(url) }
+        try expectOK(response, what: "scene list")
+        do {
+            return try JSONDecoder().decode(RemoteSceneList.self, from: response.data).scenes
+        } catch {
+            throw ARBridgeError.malformedResponse("\(error)")
+        }
+    }
+
+    /// `GET /v0/scenes/{id}/{file}` (`scene.json` or `points.ply`).
+    public func sceneFile(id: String, file: String) async throws -> Data {
+        let url = try makeURL(path: "/v0/scenes/\(try Self.segment(id))/\(try Self.segment(file))", queryItems: [])
+        let response = try await perform { try await transport.get(url) }
+        try expectOK(response, what: "scene file")
+        return response.data
+    }
+
+    /// `PUT /v0/scenes/{id}/{file}`. Send `points.ply` before `scene.json`: the server lists a
+    /// scene only once its manifest exists.
+    public func putSceneFile(id: String, file: String, data: Data) async throws {
+        let url = try makeURL(path: "/v0/scenes/\(try Self.segment(id))/\(try Self.segment(file))", queryItems: [])
+        let response = try await perform { try await transport.put(url, body: data) }
+        try expectOK(response, what: "scene upload")
+    }
+
+    /// `DELETE /v0/scenes/{id}`.
+    public func deleteScene(id: String) async throws {
+        let url = try makeURL(path: "/v0/scenes/\(try Self.segment(id))", queryItems: [])
+        let response = try await perform { try await transport.delete(url) }
+        try expectOK(response, what: "scene delete")
+    }
+
+    /// `POST /v0/scenes/{id}/publish`: ar_bridge filters the stored scene with its own boxes and
+    /// publishes it as the live scan, like an upload.
+    public func publishScene(id: String) async throws -> CloudUploadResult {
+        let url = try makeURL(path: "/v0/scenes/\(try Self.segment(id))/publish", queryItems: [])
+        let response = try await perform { try await transport.post(url, body: Data()) }
+        try expectOK(response, what: "scene publish")
+        do {
+            return try JSONDecoder().decode(CloudUploadResult.self, from: response.data)
+        } catch {
+            throw ARBridgeError.malformedResponse("\(error)")
+        }
+    }
+
+    /// Scene ids/file names go into the URL path verbatim; refuse anything that could change it.
+    private static func segment(_ s: String) throws -> String {
+        guard !s.isEmpty, !s.hasPrefix("."), s.allSatisfy({ $0.isLetter || $0.isNumber || "-_.".contains($0) }),
+              s.allSatisfy(\.isASCII)
+        else {
+            throw ARBridgeError.badRequest("invalid scene path segment \(s)")
+        }
+        return s
+    }
+
+    private func expectOK(_ response: HTTPResponse, what: String) throws {
+        switch response.statusCode {
+        case 200: return
+        case 400: throw ARBridgeError.badRequest(bodyText(response))
+        case 404: throw ARBridgeError.notFound(bodyText(response))
+        case 501: throw ARBridgeError.notImplemented(bodyText(response))
+        default:
+            log.error("\(what, privacy: .public) got unexpected status \(response.statusCode)")
+            throw ARBridgeError.serverError(status: response.statusCode, message: bodyText(response))
+        }
+    }
+
     /// `GET /health`.
     public func health() async throws -> ARBridgeHealth {
         let url = baseURL.appendingPathComponent("health")
@@ -164,6 +236,24 @@ public struct ARBridgeClient: Sendable {
     private func bodyText(_ response: HTTPResponse) -> String {
         String(decoding: response.data, as: UTF8.self)
     }
+}
+
+/// One row of `GET /v0/scenes`: the folder id plus the manifest fields the list shows. (The full
+/// manifest type lives in SceneLibrary, above this package.)
+public struct RemoteSceneSummary: Decodable, Sendable, Equatable, Identifiable {
+    public struct Manifest: Decodable, Sendable, Equatable {
+        public let name: String
+        public let createdAt: String
+        public let pointCount: Int
+        public let robotName: String?
+    }
+
+    public let id: String
+    public let manifest: Manifest
+}
+
+struct RemoteSceneList: Decodable {
+    let scenes: [RemoteSceneSummary]
 }
 
 public struct ARBridgeHealth: Decodable, Sendable, Equatable {

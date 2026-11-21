@@ -46,6 +46,7 @@ targets:
       - package: URDFKit
       - package: MeshProvider
       - package: SceneLibrary
+      - package: ARBridgeTransport
     info:
       path: MRRos/Info.plist
       properties:

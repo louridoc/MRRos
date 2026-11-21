@@ -97,6 +97,33 @@ public struct SceneStore: Sendable {
         directory.appendingPathComponent(id, isDirectory: true)
     }
 
+    /// Writes a scene received as its two files (pulled from ar_bridge) under `id`, after checking
+    /// both decode — a bad download never becomes a listed scene. Same id = same scene: replaced.
+    public func importFiles(id: String, manifest: Data, points: Data) throws {
+        _ = try Self.decodeManifest(manifest)
+        do {
+            _ = try PLYCodec.decode(points)
+        } catch {
+            throw SceneStoreError.corrupt("\(id): \(error)")
+        }
+        let folder = folder(id)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try points.write(to: folder.appendingPathComponent(Self.pointsFile), options: .atomic)
+        try manifest.write(to: folder.appendingPathComponent(Self.manifestFile), options: .atomic)
+    }
+
+    /// The scene's two files as stored, for pushing to ar_bridge.
+    public func files(_ id: String) throws -> (manifest: Data, points: Data) {
+        let folder = folder(id)
+        guard let manifest = try? Data(contentsOf: folder.appendingPathComponent(Self.manifestFile)) else {
+            throw SceneStoreError.notFound(id)
+        }
+        guard let points = try? Data(contentsOf: folder.appendingPathComponent(Self.pointsFile)) else {
+            throw SceneStoreError.corrupt("\(id): no \(Self.pointsFile)")
+        }
+        return (manifest, points)
+    }
+
     // MARK: Encoding (shared with the ar_bridge transfer, which sends the same two files)
 
     public static func encodeManifest(_ manifest: SceneManifest) throws -> Data {

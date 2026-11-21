@@ -67,7 +67,7 @@ struct ContentView: View {
             ConnectionSheet(session: session)
         }
         .sheet(isPresented: $scanScene.showScenes) {
-            ScenesSheet(scanScene: scanScene, robotScene: scene)
+            ScenesSheet(scanScene: scanScene, robotScene: scene, arBridgeURL: session.settings.arBridgeURL)
         }
     }
 }

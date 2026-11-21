@@ -6,6 +6,7 @@ public protocol HTTPTransport: Sendable {
     func get(_ url: URL) async throws -> HTTPResponse
     func post(_ url: URL, body: Data) async throws -> HTTPResponse
     func delete(_ url: URL) async throws -> HTTPResponse
+    func put(_ url: URL, body: Data) async throws -> HTTPResponse
 }
 
 public struct HTTPResponse: Sendable, Equatable {
@@ -42,6 +43,15 @@ public struct URLSessionHTTPTransport: HTTPTransport {
     public func post(_ url: URL, body: Data) async throws -> HTTPResponse {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.httpBody = body
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await session.data(for: request)
+        return try respond(data: data, response: response)
+    }
+
+    public func put(_ url: URL, body: Data) async throws -> HTTPResponse {
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
         request.httpBody = body
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         let (data, response) = try await session.data(for: request)

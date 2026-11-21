@@ -481,3 +481,14 @@ Findings log:
       plan avoids it. Baseline on the old ar_bridge: **FAIL** (restarted move_group had no wall,
       plan went through it). ar_bridge logs "new volatile subscriber … re-publishing in 3 s".
       Unit tests: `test_late_join.py`.
+- [x] Part 2, scene format + filtering (2026-11-21): SceneLibrary tests (14, incl. push/pull with a
+      mocked ar_bridge); ar_bridge `test_scenes.py` reproduces Swift's filter exactly on a
+      Swift-written fixture (rotated robot box, padding, yawed exclusion, crop: 840 of 3087 kept);
+      live ar_bridge: PUT fixture → listed → publish → `/mrros/static_cloud` width 840.
+- [ ] Device: Save a scene; force-quit; re-place (or restore) the robot; Load → scan and boxes
+      overlay where they were. Load replaces the current scan.
+- [ ] Device: Upload a saved scene from the list WITHOUT placing the robot → same cloud in RViz as
+      uploading it live.
+- [ ] Device: Copy to ROS machine → appears under "On ROS machine"; Publish from there → RViz;
+      delete it on the phone, Download it back → identical (same point count).
+- [ ] Device: Share… → AirDrop the .zip to the Mac; Files app shows Documents/Scenes.

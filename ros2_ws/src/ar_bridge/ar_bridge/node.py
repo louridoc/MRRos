@@ -5,6 +5,7 @@ Parameters:
   frame_id (string)      frame the published cloud is expressed in, default base_link
   output_dir (string)    where .pcd/.ply files are written, default ~/.mrros/clouds
   mesh_cache_dir (string) where converted .obj meshes are cached, default ~/.mrros/mesh_cache
+  scenes_dir (string)    saved-scene library (M5c), default ~/.mrros/scenes
   late_join_delay_s (float) wait after a new volatile subscriber (e.g. a restarted move_group)
                          before re-publishing the last scan to it, default 3.0; < 0 disables
 """
@@ -28,6 +29,7 @@ from ar_bridge.http_api import Handlers, MeshResult, make_app
 from ar_bridge.late_join import LateJoinWatcher
 from ar_bridge.mesh_resolver import MeshCache, resolve_mesh
 from ar_bridge.ply import DecodedCloud, PLYError, decode, merge
+from ar_bridge.scenes import SceneLibrary, filter_for_upload
 
 _LATCHED_QOS = QoSProfile(
     depth=1,
@@ -48,6 +50,7 @@ class ARBridge(Node):
         # upload REPLACES the scene there too. Empty string disables. No-op without MoveIt.
         self.declare_parameter("clear_octomap_service", "/clear_octomap")
         self.declare_parameter("late_join_delay_s", 3.0)
+        self.declare_parameter("scenes_dir", os.path.expanduser("~/.mrros/scenes"))
 
         self.port = int(self.get_parameter("http_port").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
@@ -69,8 +72,13 @@ class ARBridge(Node):
             self.create_timer(1.0, self._check_late_joiners)
 
         # M3's on_cloud and M2b's get_mesh are both live.
+        self.scenes = SceneLibrary(Path(str(self.get_parameter("scenes_dir").value)))
         self.handlers = Handlers(
-            get_mesh=self._get_mesh, on_cloud=self._on_cloud, on_clear=self._on_clear
+            get_mesh=self._get_mesh,
+            on_cloud=self._on_cloud,
+            on_clear=self._on_clear,
+            scenes=self.scenes,
+            on_publish_scene=self._on_publish_scene,
         )
         distro = os.environ.get("ROS_DISTRO", "?")
         self.get_logger().info(
@@ -100,7 +108,25 @@ class ARBridge(Node):
         if mode == "append" and name in self._clouds:
             decoded = merge(self._clouds[name], decoded)
         self._clouds[name] = decoded
+        return await self._publish(decoded, frame_id=frame_id, name=name, label=mode)
 
+    async def _on_publish_scene(self, scene_id: str) -> dict:
+        """POST /v0/scenes/{id}/publish: a stored scene, filtered with its own boxes and scan-time
+        robot exactly like the app's upload-from-list, published as the live scan."""
+        loop = asyncio.get_running_loop()
+        manifest, kept = await loop.run_in_executor(None, self._load_filtered, scene_id)
+        self._clouds["live_scan"] = kept
+        result = await self._publish(kept, frame_id="base_link", name="live_scan", label=scene_id)
+        return dict(result, scene=scene_id, name=manifest.get("name"))
+
+    def _load_filtered(self, scene_id: str) -> tuple[dict, DecodedCloud]:
+        manifest, cloud = self.scenes.load(scene_id)
+        return manifest, filter_for_upload(manifest, cloud)
+
+    async def _publish(
+        self, decoded: DecodedCloud, *, frame_id: str, name: str, label: str
+    ) -> dict:
+        loop = asyncio.get_running_loop()
         # PCD writing is the dominant cost at scan scale (~2s/1M points even vectorized) — keep
         # it off the event loop too, same reasoning as decode() above.
         #
@@ -123,7 +149,7 @@ class ARBridge(Node):
         self.cloud_pub.publish(result.message)
         self._last_cloud = result.message
         self.get_logger().info(
-            f"cloud '{name}' ({mode}): {result.point_count} pts -> {self.cloud_topic}, "
+            f"cloud '{name}' ({label}): {result.point_count} pts -> {self.cloud_topic}, "
             f"{result.pcd_path}{' (MoveIt octomap cleared first)' if cleared else ''}"
         )
         return {

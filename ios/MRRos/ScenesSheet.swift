@@ -1,3 +1,4 @@
+import ARBridgeTransport
 import SceneLibrary
 import SwiftUI
 import UIKit
@@ -8,12 +9,17 @@ import UIKit
 struct ScenesSheet: View {
     @Bindable var scanScene: ScanScene
     let robotScene: RobotScene
+    /// ar_bridge for the ROS-side library; nil until connection settings have a host.
+    let arBridgeURL: URL?
     @Environment(\.dismiss) private var dismiss
 
     @State private var newName = ""
     @State private var renaming: SceneSummary?
     @State private var renameText = ""
     @State private var shareItem: ShareItem?
+    @State private var remote: [RemoteSceneSummary] = []
+    @State private var remoteStatus = "Not checked yet."
+    @State private var remoteBusy = false
 
     private let store = try? SceneStore.standard()
 
@@ -47,6 +53,26 @@ struct ScenesSheet: View {
                 } footer: {
                     Text(scanScene.status).lineLimit(3)
                 }
+
+                Section {
+                    ForEach(remote) { scene in
+                        remoteRow(scene)
+                    }
+                } header: {
+                    HStack {
+                        Text("On ROS machine (ar_bridge)")
+                        Spacer()
+                        Button {
+                            Task { await refreshRemote() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .disabled(arBridgeURL == nil || remoteBusy)
+                        .accessibilityLabel("Refresh ROS scenes")
+                    }
+                } footer: {
+                    Text(remoteStatus).lineLimit(3)
+                }
             }
             .navigationTitle("Scenes")
             .navigationBarTitleDisplayMode(.inline)
@@ -55,6 +81,7 @@ struct ScenesSheet: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .task { await refreshRemote() }
             .onAppear {
                 refresh()
                 if newName.isEmpty {
@@ -124,6 +151,12 @@ struct ScenesSheet: View {
                 Label("Rename", systemImage: "pencil")
             }
             Button {
+                Task { await push(scene) }
+            } label: {
+                Label("Copy to ROS machine", systemImage: "externaldrive.badge.plus")
+            }
+            .disabled(arBridgeURL == nil || remoteBusy)
+            Button {
                 if let folder = store?.folder(scene.id), let zip = SceneZip.make(folder: folder) {
                     shareItem = ShareItem(url: zip)
                 }
@@ -136,6 +169,105 @@ struct ScenesSheet: View {
             } label: {
                 Label("Delete", systemImage: "trash")
             }
+        }
+    }
+
+    private func remoteRow(_ scene: RemoteSceneSummary) -> some View {
+        let m = scene.manifest
+        let haveIt = scanScene.scenes.contains { $0.id == scene.id }
+        return HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(m.name)
+                Text("\(m.pointCount) pts · \(m.robotName ?? "robot?")\(haveIt ? " · on this phone" : "")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                Task { await pull(scene) }
+            } label: {
+                Image(systemName: "icloud.and.arrow.down")
+            }
+            .buttonStyle(.bordered)
+            .disabled(remoteBusy)
+            .accessibilityLabel("Download \(m.name) to this phone")
+
+            Button {
+                Task { await publish(scene) }
+            } label: {
+                Image(systemName: "paperplane")
+            }
+            .buttonStyle(.bordered)
+            .disabled(remoteBusy)
+            .accessibilityLabel("Publish \(m.name) from the ROS machine")
+        }
+        .swipeActions {
+            Button(role: .destructive) {
+                Task { await deleteRemote(scene) }
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
+    // MARK: ROS-side library
+
+    private var client: ARBridgeClient? {
+        arBridgeURL.map { ARBridgeClient(baseURL: $0) }
+    }
+
+    private func remoteAction(_ busyText: String, _ action: (ARBridgeClient) async throws -> String) async {
+        guard let client else {
+            remoteStatus = "Set the ROS host in connection settings first."
+            return
+        }
+        remoteBusy = true
+        remoteStatus = busyText
+        do {
+            remoteStatus = try await action(client)
+        } catch {
+            remoteStatus = "\(error)"
+        }
+        remoteBusy = false
+    }
+
+    private func refreshRemote() async {
+        await remoteAction("Checking…") { client in
+            remote = try await client.listScenes()
+            return remote.isEmpty ? "No scenes on the ROS machine yet." : "\(remote.count) scene(s)."
+        }
+    }
+
+    private func push(_ scene: SceneSummary) async {
+        guard let store else { return }
+        await remoteAction("Copying “\(scene.manifest.name)”…") { client in
+            try await SceneTransfer.push(scene.id, from: store, to: client)
+            remote = try await client.listScenes()
+            return "Copied “\(scene.manifest.name)” to the ROS machine."
+        }
+    }
+
+    private func pull(_ scene: RemoteSceneSummary) async {
+        guard let store else { return }
+        await remoteAction("Downloading “\(scene.manifest.name)”…") { client in
+            try await SceneTransfer.pull(scene.id, from: client, into: store)
+            refresh()
+            return "Downloaded “\(scene.manifest.name)”."
+        }
+    }
+
+    private func publish(_ scene: RemoteSceneSummary) async {
+        await remoteAction("Publishing “\(scene.manifest.name)”…") { client in
+            let result = try await client.publishScene(id: scene.id)
+            return "Published “\(scene.manifest.name)”: \(result.points) points → \(result.topic)."
+        }
+    }
+
+    private func deleteRemote(_ scene: RemoteSceneSummary) async {
+        await remoteAction("Deleting…") { client in
+            try await client.deleteScene(id: scene.id)
+            remote = try await client.listScenes()
+            return "Deleted “\(scene.manifest.name)” from the ROS machine."
         }
     }
 

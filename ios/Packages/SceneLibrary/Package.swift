@@ -10,6 +10,7 @@ let package = Package(
     dependencies: [
         .package(path: "../LiDARScan"),
         .package(path: "../AlignmentKit"),
+        .package(path: "../ARBridgeTransport"),
     ],
     targets: [
         .target(
@@ -17,6 +18,7 @@ let package = Package(
             dependencies: [
                 .product(name: "LiDARScan", package: "LiDARScan"),
                 .product(name: "AlignmentKit", package: "AlignmentKit"),
+                .product(name: "ARBridgeTransport", package: "ARBridgeTransport"),
             ],
             swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
         ),

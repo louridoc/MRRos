@@ -48,6 +48,20 @@ latched cloud on the same topic, so RViz, MoveIt and late joiners all see the sc
 → `200 {"cleared": "<name>|all", "topic": "/mrros/static_cloud", "moveit_octomap_cleared": bool}`
 Errors: `501` on an ar_bridge without this endpoint (the app reports "couldn't clear ROS side").
 
+## Scene library  (M5c)
+Saved scenes on the ROS machine, same folder format as the app (`docs/protocols/scene_format.md`),
+stored under the `scenes_dir` param (default `~/.mrros/scenes`).
+
+| Method + path | Does |
+|---|---|
+| `GET /v0/scenes` | `{"scenes": [{"id", "manifest": {...}}]}`, newest first; folders without both files are skipped. |
+| `GET /v0/scenes/{id}/{file}` | `file` = `scene.json` or `points.ply`; anything else `404`. |
+| `PUT /v0/scenes/{id}/{file}` | Validated before writing (`400` on a bad manifest/PLY/id). Send `points.ply` first, `scene.json` last. |
+| `DELETE /v0/scenes/{id}` | Removes the folder (`404` if missing). |
+| `POST /v0/scenes/{id}/publish` | Filters the scene with its own boxes and scan-time robot, publishes it as the live scan (`live_scan`, base_link) exactly like an upload: octomap cleared first, latched, re-sent to late joiners. → upload result + `scene`, `name`. |
+
+Ids must match `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}` (no `..`), else `400`.
+
 ## GET /v0/mesh?uri=package://pkg/path.dae  (M2b)
 → `200` body = **Wavefront OBJ** bytes (`Content-Type: model/obj`), header `X-Mesh-SHA256` =
 sha256 of the *source* file (same convention as the bundled-mesh manifest's `sha256` field, so
@@ -78,3 +92,4 @@ when no manifest entry names the file explicitly.
   backfill semantics specified above once actually built, instead of left open in the draft.
 - v0 (2026-11-18): `DELETE /v0/cloud` added; uploads clear MoveIt's octomap first; cloud stamp 0.
 - v0 (2026-11-21): last scan re-published to late VOLATILE subscribers (move_group (re)start).
+- v0 (2026-11-21): scene library endpoints (`/v0/scenes...`).

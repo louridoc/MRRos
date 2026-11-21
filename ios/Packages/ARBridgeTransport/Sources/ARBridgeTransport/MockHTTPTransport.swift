@@ -33,6 +33,14 @@ public actor MockHTTPTransport: HTTPTransport {
         return try respond(to: url)
     }
 
+    /// (url, body) per PUT, in order — scene pushes must send points before the manifest.
+    public private(set) var puts: [(url: URL, body: Data)] = []
+
+    public func put(_ url: URL, body: Data) async throws -> HTTPResponse {
+        puts.append((url, body))
+        return try respond(to: url)
+    }
+
     public func post(_ url: URL, body: Data) async throws -> HTTPResponse {
         postedBodies.append(body)
         return try respond(to: url)
