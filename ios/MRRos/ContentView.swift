@@ -72,6 +72,23 @@ struct ContentView: View {
     }
 }
 
+/// The upload menu's entries (scan bar and saved scenes): what goes to ROS.
+struct UploadChoices: View {
+    let upload: (ScanScene.UploadMode) -> Void
+
+    var body: some View {
+        Button { upload(.points) } label: {
+            Label("Upload points (MoveIt octomap)", systemImage: "circle.grid.3x3")
+        }
+        Button { upload(.mesh) } label: {
+            Label("Upload mesh (collision object)", systemImage: "cube.transparent")
+        }
+        Button { upload(.both) } label: {
+            Label("Upload both", systemImage: "square.stack.3d.up")
+        }
+    }
+}
+
 /// Title + icon when the row has room, icon only when it doesn't — never wrapped onto two lines.
 struct FittingLabel: View {
     let title: String
@@ -241,14 +258,6 @@ struct ScanActions: View {
     @Bindable var scanScene: ScanScene
     @Bindable var robotScene: RobotScene
 
-    private var uploadIcon: String {
-        switch scanScene.uploadMode {
-        case .points: "arrow.up.circle"
-        case .mesh: "cube.transparent"
-        case .both: "square.stack.3d.up"
-        }
-    }
-
     var body: some View {
         HStack(spacing: 8) {
             Button {
@@ -276,23 +285,22 @@ struct ScanActions: View {
             .disabled(scanScene.pointCount == 0 && scanScene.exclusionIDs.isEmpty)
             .accessibilityLabel("Clear scan and exclusion boxes")
 
-            // Tap uploads with the current mode; long-press picks Points / Mesh / Both.
+            // Tap opens the choice, so it can't be missed (a long-press menu was).
             Menu {
-                Picker("Upload", selection: $scanScene.uploadMode) {
-                    ForEach(ScanScene.UploadMode.allCases) { Text($0.rawValue).tag($0) }
+                UploadChoices { mode in
+                    scanScene.uploadMode = mode
+                    scanScene.request = .upload
                 }
             } label: {
                 if scanScene.isUploading {
                     ProgressView()
                 } else {
-                    Image(systemName: uploadIcon)
+                    Image(systemName: "arrow.up.circle")
                 }
-            } primaryAction: {
-                scanScene.request = .upload
             }
             .buttonStyle(.bordered)
             .disabled(scanScene.pointCount == 0 || scanScene.isUploading)
-            .accessibilityLabel("Upload scan (\(scanScene.uploadMode.rawValue))")
+            .accessibilityLabel("Upload scan")
 
             // Boxes live in base_link, so they need a placed robot.
             Toggle(isOn: $scanScene.cropEnabled) {

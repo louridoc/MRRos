@@ -127,8 +127,11 @@ struct ScenesSheet: View {
             .disabled(!robotScene.isPlaced || scanScene.isWorkingOnScene)
             .accessibilityLabel("Load \(m.name)")
 
-            Button {
-                scanScene.request = .uploadScene(id: scene.id)
+            Menu {
+                UploadChoices { mode in
+                    scanScene.uploadMode = mode
+                    scanScene.request = .uploadScene(id: scene.id)
+                }
             } label: {
                 Image(systemName: "arrow.up.circle")
             }

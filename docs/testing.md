@@ -509,6 +509,6 @@ Findings log:
       decodes the Swift-written mesh exactly); scene fixture regenerated with a mesh — Python's
       centroid filter keeps exactly Swift's 392 of 1029 triangles; live: fixture pushed with mesh,
       published → 840 pts + 392 triangles, `mrros_scan_mesh` in MoveIt's world.
-- [ ] Device: Upload long-press → Mesh: RViz MotionPlanning shows the room as a mesh; the real
+- [ ] Device: Upload (tap) → "Upload mesh": RViz MotionPlanning shows the room as a mesh; the real
       robot's own surfaces are NOT in it (else MoveIt says the start state is in collision).
 - [ ] Device: Both; Clear empties both; save a scene with mesh, upload it from the list as Mesh.
