@@ -107,12 +107,20 @@ def _setup(context, *args, **kwargs):
         output="log",
     )
 
-    ar_bridge = Node(
-        package="ar_bridge",
-        executable="ar_bridge",
-        parameters=[{"http_port": LaunchConfiguration("ar_bridge_port")}],
+    # ar_bridge's own launch file, so the dev bringup and other workspaces configure it the same
+    # way (its config/ar_bridge.yaml, plus overrides).
+    ar_bridge = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("ar_bridge"), "launch", "ar_bridge.launch.py"
+            )
+        ),
+        launch_arguments={
+            "http_port": LaunchConfiguration("ar_bridge_port"),
+            "scenes_dir": LaunchConfiguration("scenes_dir"),
+            "params_file": LaunchConfiguration("ar_bridge_params_file"),
+        }.items(),
         condition=IfCondition(LaunchConfiguration("ar_bridge")),
-        output="screen",
     )
 
     # move_group + MoveIt's RViz (moveit.launch.py); the dev RViz is skipped when this is on so
@@ -149,6 +157,18 @@ def generate_launch_description() -> LaunchDescription:
                 "ar_bridge", default_value="true", description="launch ar_bridge too"
             ),
             DeclareLaunchArgument("ar_bridge_port", default_value="8765"),
+            DeclareLaunchArgument(
+                "scenes_dir",
+                default_value="__unset__",
+                description="ar_bridge saved-scene library (default ~/.mrros/scenes)",
+            ),
+            DeclareLaunchArgument(
+                "ar_bridge_params_file",
+                default_value=os.path.join(
+                    get_package_share_directory("ar_bridge"), "config", "ar_bridge.yaml"
+                ),
+                description="ar_bridge parameter file (see ar_bridge/config/ar_bridge.yaml)",
+            ),
             DeclareLaunchArgument(
                 "moveit", default_value="false", description="also launch move_group (M5)"
             ),

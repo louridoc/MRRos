@@ -492,3 +492,8 @@ Findings log:
 - [ ] Device: Copy to ROS machine → appears under "On ROS machine"; Publish from there → RViz;
       delete it on the phone, Download it back → identical (same point count).
 - [ ] Device: Share… → AirDrop the .zip to the Mac; Files app shows Documents/Scenes.
+- [x] ar_bridge configurable from any workspace (2026-11-21): `ar_bridge.launch.py` with
+      `params_file` (default config/ar_bridge.yaml) + per-parameter overrides; checked live:
+      overrides (`scenes_dir`, `http_port`, `clear_octomap_service:=none`), a custom yaml with `~`,
+      and the dev bringup's `scenes_dir:=` passthrough. (`ros2 launch` rejects empty `name:=`,
+      hence `none` to disable clearing.)

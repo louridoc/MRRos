@@ -47,20 +47,22 @@ class ARBridge(Node):
         self.declare_parameter("mesh_cache_dir", os.path.expanduser("~/.mrros/mesh_cache"))
         self.declare_parameter("cloud_topic", "/mrros/static_cloud")
         # MoveIt's octomap only ever adds what it's sent; clear it before each publish so an
-        # upload REPLACES the scene there too. Empty string disables. No-op without MoveIt.
+        # upload REPLACES the scene there too. "" or "none" disables. No-op without MoveIt.
         self.declare_parameter("clear_octomap_service", "/clear_octomap")
         self.declare_parameter("late_join_delay_s", 3.0)
         self.declare_parameter("scenes_dir", os.path.expanduser("~/.mrros/scenes"))
 
         self.port = int(self.get_parameter("http_port").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
-        self.output_dir = Path(str(self.get_parameter("output_dir").value))
+        self.output_dir = Path(self._path_param("output_dir"))
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.mesh_cache = MeshCache(str(self.get_parameter("mesh_cache_dir").value))
+        self.mesh_cache = MeshCache(self._path_param("mesh_cache_dir"))
         self.cloud_topic = str(self.get_parameter("cloud_topic").value)
         self.cloud_pub = self.create_publisher(PointCloud2, self.cloud_topic, _LATCHED_QOS)
         clear_srv = str(self.get_parameter("clear_octomap_service").value)
-        self._clear_octomap = self.create_client(Empty, clear_srv) if clear_srv else None
+        # "" or "none" disables ("none" because `ros2 launch` rejects an empty `name:=`).
+        enabled = clear_srv.strip().lower() not in ("", "none")
+        self._clear_octomap = self.create_client(Empty, clear_srv) if enabled else None
         # One accumulator per `name` (mode=append target); see docs/protocols/ar_bridge_http.md.
         self._clouds: dict[str, DecodedCloud] = {}
         # The last non-empty cloud published, for subscribers that join late. Set from the HTTP
@@ -72,7 +74,7 @@ class ARBridge(Node):
             self.create_timer(1.0, self._check_late_joiners)
 
         # M3's on_cloud and M2b's get_mesh are both live.
-        self.scenes = SceneLibrary(Path(str(self.get_parameter("scenes_dir").value)))
+        self.scenes = SceneLibrary(Path(self._path_param("scenes_dir")))
         self.handlers = Handlers(
             get_mesh=self._get_mesh,
             on_cloud=self._on_cloud,
@@ -83,9 +85,14 @@ class ARBridge(Node):
         distro = os.environ.get("ROS_DISTRO", "?")
         self.get_logger().info(
             f"http on :{self.port}, frame_id={self.frame_id}, out={self.output_dir}, "
-            f"mesh_cache={self.mesh_cache.cache_dir}, cloud_topic={self.cloud_topic}, "
+            f"mesh_cache={self.mesh_cache.cache_dir}, scenes={self.scenes.root}, "
+            f"cloud_topic={self.cloud_topic}, "
             f"ROS_DISTRO={distro}"
         )
+
+    def _path_param(self, name: str) -> str:
+        """A path parameter with "~" expanded (the yaml and launch overrides may use it)."""
+        return os.path.expanduser(str(self.get_parameter(name).value))
 
     async def _get_mesh(self, uri: str) -> MeshResult:
         # trimesh conversion is blocking CPU work; keep it off the event loop so one slow

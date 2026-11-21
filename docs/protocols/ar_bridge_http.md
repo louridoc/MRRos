@@ -50,7 +50,8 @@ Errors: `501` on an ar_bridge without this endpoint (the app reports "couldn't c
 
 ## Scene library  (M5c)
 Saved scenes on the ROS machine, same folder format as the app (`docs/protocols/scene_format.md`),
-stored under the `scenes_dir` param (default `~/.mrros/scenes`).
+stored under the `scenes_dir` param (default `~/.mrros/scenes`; set it with
+`ros2 launch ar_bridge ar_bridge.launch.py scenes_dir:=…`, or in a copy of `config/ar_bridge.yaml`).
 
 | Method + path | Does |
 |---|---|
