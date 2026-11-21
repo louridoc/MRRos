@@ -123,6 +123,19 @@ public struct ARBridgeClient: Sendable {
         }
     }
 
+    /// `POST /v0/scene_mesh` — the filtered scan mesh (`LiDARScan.MeshPLY`) becomes one MoveIt
+    /// collision object, replacing the previous one. `applied` false = MoveIt isn't up yet.
+    public func uploadSceneMesh(_ data: Data, frameId: String) async throws -> SceneMeshResult {
+        let url = try makeURL(path: "/v0/scene_mesh", queryItems: [URLQueryItem(name: "frame_id", value: frameId)])
+        let response = try await perform { try await transport.post(url, body: data) }
+        try expectOK(response, what: "scene mesh upload")
+        do {
+            return try JSONDecoder().decode(SceneMeshResult.self, from: response.data)
+        } catch {
+            throw ARBridgeError.malformedResponse("\(error)")
+        }
+    }
+
     // MARK: - Scene library (M5c) — see docs/protocols/ar_bridge_http.md
 
     /// `GET /v0/scenes`, newest first.
@@ -235,6 +248,19 @@ public struct ARBridgeClient: Sendable {
 
     private func bodyText(_ response: HTTPResponse) -> String {
         String(decoding: response.data, as: UTF8.self)
+    }
+}
+
+/// The body `POST /v0/scene_mesh` returns.
+public struct SceneMeshResult: Sendable, Equatable, Decodable {
+    public let triangles: Int
+    public let vertices: Int
+    public let objectId: String
+    public let applied: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case triangles, vertices, applied
+        case objectId = "object_id"
     }
 }
 

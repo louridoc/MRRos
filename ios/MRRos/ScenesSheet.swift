@@ -110,7 +110,8 @@ struct ScenesSheet: View {
                 Text(m.name).font(.body)
                 Text(
                     "\(m.createdAt.formatted(date: .abbreviated, time: .shortened)) · "
-                        + "\(m.pointCount) pts · \(m.robotName ?? "robot?")"
+                        + "\(m.pointCount) pts\(m.triangleCount.map { " · mesh \($0) tris" } ?? "") · "
+                        + "\(m.robotName ?? "robot?")"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

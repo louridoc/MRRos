@@ -828,6 +828,13 @@ struct ARContainerView: UIViewRepresentable {
             scanScene.status = "Scan cleared. Move around, then capture again."
         }
 
+        /// Encoded, filtered upload bodies, prepared off the main thread.
+        private struct PreparedUpload: Sendable {
+            var frameId: String
+            var points: (data: Data, count: Int)?
+            var mesh: (data: Data, triangles: Int)?
+        }
+
         private func uploadScan() {
             guard !scanCloud.isEmpty else {
                 scanScene.status = "Nothing to upload yet — capture a scan first."
@@ -838,56 +845,85 @@ struct ARContainerView: UIViewRepresentable {
                 return
             }
 
-            // Registration: if the robot has been placed/aligned, re-express every point
-            // relative to that alignment (position AND yaw) before rotating into ROS axis
-            // convention, so the cloud lands in base_link where the gizmo says the robot is.
-            // Uses the CURRENT alignment/crop/robot pose — re-aligning doesn't need a re-scan.
-            // Inputs are snapshotted here (boxes need RealityKit); filtering, registration and
-            // PLY encoding run off the main thread.
+            // Registration: if the robot has been placed/aligned, re-express everything relative
+            // to that alignment (position AND yaw) in ROS axes, so it lands in base_link where the
+            // gizmo says the robot is. Uses the CURRENT alignment/boxes/robot pose — re-aligning
+            // doesn't need a re-scan. Inputs are snapshotted here (boxes need RealityKit);
+            // filtering, registration and encoding run off the main thread. Mesh triangles are
+            // kept or dropped by their centroid, with exactly the boxes the points use.
+            let mode = scanScene.uploadMode
             let cloud = scanCloud
             let crop = cropBox()
             let exclusions = exclusionBoxes()
             let robot = robotBoxes()
             let alignment = alignment
+            let processor = processor
             let client = ARBridgeClient(baseURL: arBridgeURL)
             scanScene.isUploading = true
             scanScene.status = "Preparing upload…"
             uploadTask?.cancel()
             uploadTask = Task { [weak self] in
-                let prepared = await Task.detached(priority: .userInitiated) { () -> (Data, String, Int)? in
-                    let classes = SceneFilter.classify(
-                        cloud, crop: crop, exclusions: exclusions, robot: robot, robotPadding: Self.robotPadding
-                    )
-                    let kept = cloud.selecting(classes, equalTo: .kept)
-                    guard !kept.isEmpty else { return nil }
-                    if let alignment {
-                        let registered = CloudRegistration.registering(kept, against: alignment)
-                        return (PLYCodec.encode(registered), "base_link", registered.count)
+                let mesh = mode.sendsMesh ? await processor.currentMesh() : ScanMesh.empty
+                let prepared = await Task.detached(priority: .userInitiated) { () -> PreparedUpload in
+                    var out = PreparedUpload(frameId: alignment == nil ? "map" : "base_link")
+                    if mode.sendsPoints {
+                        let classes = SceneFilter.classify(
+                            cloud, crop: crop, exclusions: exclusions, robot: robot, robotPadding: Self.robotPadding
+                        )
+                        let kept = cloud.selecting(classes, equalTo: .kept)
+                        if !kept.isEmpty {
+                            let out3 = alignment.map { CloudRegistration.registering(kept, against: $0) }
+                                ?? CloudRegistration.rotatedToROSAxes(kept)
+                            out.points = (PLYCodec.encode(out3), out3.count)
+                        }
                     }
-                    let unregistered = CloudRegistration.rotatedToROSAxes(kept)
-                    return (PLYCodec.encode(unregistered), "map", unregistered.count)
+                    if mode.sendsMesh, !mesh.isEmpty {
+                        let classes = SceneFilter.classify(
+                            mesh.centroids(), crop: crop, exclusions: exclusions, robot: robot,
+                            robotPadding: Self.robotPadding
+                        )
+                        let kept = mesh.keepingTriangles(classes.map { $0 == .kept })
+                        if !kept.isEmpty {
+                            let out3 = alignment.map { CloudRegistration.registering(kept, against: $0) }
+                                ?? CloudRegistration.rotatedToROSAxes(kept)
+                            out.mesh = (MeshPLY.encode(out3), out3.triangleCount)
+                        }
+                    }
+                    return out
                 }.value
                 guard let self else { return }
-                guard let (data, frameId, count) = prepared else {
-                    scanScene.status = "Nothing left to upload — every point was filtered out (robot/crop)."
-                    scanScene.isUploading = false
+                defer { scanScene.isUploading = false }
+                if prepared.points == nil, prepared.mesh == nil {
+                    scanScene.status = mode.sendsMesh && mesh.isEmpty && !mode.sendsPoints
+                        ? "No mesh yet — capture first."
+                        : "Nothing left to upload — everything was filtered out (robot/boxes)."
                     return
                 }
-                scanScene.status = frameId == "map"
-                    ? "No robot placed — uploading \(count) points unregistered (frame \"map\")…"
-                    : "Uploading \(count) points…"
+                let frameId = prepared.frameId
+                var parts: [String] = []
                 do {
-                    // Fixed name + `.replace`: the client already holds the full accumulated,
-                    // voxel-filtered state, so every upload fully replaces the latched topic and
-                    // the on-disk file rather than relying on the server's append accumulator.
-                    let result = try await client.uploadCloud(data, frameId: frameId, name: "live_scan")
-                    scanScene.lastUploadSummary = "\(result.points) pts → \(result.topic) (\(frameId))"
-                    scanScene.status = "Uploaded \(result.points) points."
+                    if let points = prepared.points {
+                        scanScene.status = "Uploading \(points.count) points…"
+                        // Fixed name + `.replace`: the client holds the full accumulated,
+                        // voxel-filtered state, so every upload fully replaces the latched topic.
+                        let result = try await client.uploadCloud(points.data, frameId: frameId, name: "live_scan")
+                        parts.append("\(result.points) points")
+                    }
+                    if let mesh = prepared.mesh {
+                        scanScene.status = "Uploading mesh (\(mesh.triangles) triangles)…"
+                        let result = try await client.uploadSceneMesh(mesh.data, frameId: frameId)
+                        parts.append("\(result.triangles) triangles" + (result.applied ? "" : " (MoveIt not up yet)"))
+                    }
+                    let summary = parts.joined(separator: " + ")
+                    scanScene.lastUploadSummary = "\(summary) (\(frameId))"
+                    scanScene.status = frameId == "map"
+                        ? "Uploaded \(summary), unregistered (no robot placed, frame \"map\")."
+                        : "Uploaded \(summary)."
                 } catch {
-                    log.error("cloud upload failed: \(String(describing: error), privacy: .public)")
-                    scanScene.status = "Upload failed: \(error)"
+                    log.error("upload failed: \(String(describing: error), privacy: .public)")
+                    let done = parts.isEmpty ? "" : " (sent: \(parts.joined(separator: " + ")))"
+                    scanScene.status = "Upload failed: \(error)\(done)"
                 }
-                scanScene.isUploading = false
             }
         }
 
@@ -925,10 +961,13 @@ struct ARContainerView: UIViewRepresentable {
             )
             scanScene.isWorkingOnScene = true
             scanScene.status = "Saving “\(name)”…"
+            let processor = processor
             Task { [weak self] in
+                let worldMesh = await processor.currentMesh()
                 let result = await Task.detached(priority: .userInitiated) { () -> Result<String, Error> in
                     let points = CloudRegistration.registering(cloud, against: alignment)
-                    return Result { try store.save(SavedScene(manifest: manifest, points: points)) }
+                    let mesh = worldMesh.isEmpty ? nil : CloudRegistration.registering(worldMesh, against: alignment)
+                    return Result { try store.save(SavedScene(manifest: manifest, points: points, mesh: mesh)) }
                 }.value
                 guard let self else { return }
                 scanScene.isWorkingOnScene = false
@@ -997,11 +1036,15 @@ struct ARContainerView: UIViewRepresentable {
             let epoch = scanEpoch
             let processor = processor
             let points = scene.points
+            let mesh = scene.mesh
             captureTask = Task { [weak self] in
-                let world = await Task.detached(priority: .userInitiated) {
-                    CloudRegistration.toWorld(points, from: alignment)
+                let (world, worldMesh) = await Task.detached(priority: .userInitiated) {
+                    (
+                        CloudRegistration.toWorld(points, from: alignment),
+                        mesh?.mappingVertices { alignment.worldPoint(fromBaseLink: $0) }
+                    )
                 }.value
-                let cloud = await processor.load(world, epoch: epoch)
+                let cloud = await processor.load(world, mesh: worldMesh, epoch: epoch)
                 guard let self, epoch == scanEpoch else { return }
                 scanCloud = cloud
                 scanScene.pointCount = cloud.count
@@ -1022,16 +1065,24 @@ struct ARContainerView: UIViewRepresentable {
                 liveRobotBoxes().map { StoredBox(world: $0, alignment: a).orientedInBaseLink }
             } ?? []
             let client = ARBridgeClient(baseURL: arBridgeURL)
+            let mode = scanScene.uploadMode
             scanScene.isWorkingOnScene = true
             scanScene.isUploading = true
             scanScene.status = "Preparing saved scene…"
             uploadTask?.cancel()
             uploadTask = Task { [weak self] in
-                let prepared = await Task.detached(priority: .userInitiated) { () -> Result<(Data, Int, String), Error> in
+                let prepared = await Task.detached(priority: .userInitiated) { () -> Result<(PreparedUpload, String), Error> in
                     Result {
                         let scene = try store.load(id)
-                        let kept = scene.filteredForUpload(liveRobot: liveRobot)
-                        return (PLYCodec.encode(kept), kept.count, scene.manifest.name)
+                        var out = PreparedUpload(frameId: "base_link")
+                        if mode.sendsPoints {
+                            let kept = scene.filteredForUpload(liveRobot: liveRobot)
+                            if !kept.isEmpty { out.points = (PLYCodec.encode(kept), kept.count) }
+                        }
+                        if mode.sendsMesh, let kept = scene.filteredMeshForUpload(liveRobot: liveRobot) {
+                            out.mesh = (MeshPLY.encode(kept), kept.triangleCount)
+                        }
+                        return (out, scene.manifest.name)
                     }
                 }.value
                 guard let self else { return }
@@ -1042,16 +1093,28 @@ struct ARContainerView: UIViewRepresentable {
                 switch prepared {
                 case let .failure(error):
                     scanScene.status = "Couldn't read the scene: \(error)"
-                case let .success((data, count, name)):
-                    guard count > 0 else {
-                        scanScene.status = "“\(name)” has nothing left to upload after filtering."
+                case let .success((upload, name)):
+                    guard upload.points != nil || upload.mesh != nil else {
+                        scanScene.status = mode == .mesh
+                            ? "“\(name)” has no mesh (saved before meshes, or none captured)."
+                            : "“\(name)” has nothing left to upload after filtering."
                         return
                     }
-                    scanScene.status = "Uploading “\(name)” (\(count) points)…"
+                    var parts: [String] = []
                     do {
-                        let result = try await client.uploadCloud(data, frameId: "base_link", name: "live_scan")
-                        scanScene.lastUploadSummary = "\(result.points) pts → \(result.topic) (base_link)"
-                        scanScene.status = "Uploaded “\(name)”: \(result.points) points."
+                        if let points = upload.points {
+                            scanScene.status = "Uploading “\(name)” (\(points.count) points)…"
+                            let result = try await client.uploadCloud(points.data, frameId: "base_link", name: "live_scan")
+                            parts.append("\(result.points) points")
+                        }
+                        if let mesh = upload.mesh {
+                            scanScene.status = "Uploading “\(name)” mesh (\(mesh.triangles) triangles)…"
+                            let result = try await client.uploadSceneMesh(mesh.data, frameId: "base_link")
+                            parts.append("\(result.triangles) triangles" + (result.applied ? "" : " (MoveIt not up yet)"))
+                        }
+                        let summary = parts.joined(separator: " + ")
+                        scanScene.lastUploadSummary = "\(summary) (base_link)"
+                        scanScene.status = "Uploaded “\(name)”: \(summary)."
                     } catch {
                         log.error("scene upload failed: \(String(describing: error), privacy: .public)")
                         scanScene.status = "Upload failed: \(error)"

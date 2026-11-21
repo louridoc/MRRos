@@ -40,3 +40,12 @@ def test_a_point_cloud_ply_is_not_a_mesh() -> None:
 
     with pytest.raises(PLYError):
         decode(encode_cloud(VERTS))
+
+
+def test_decodes_the_swift_written_mesh_exactly() -> None:
+    """fixtures/mesh_v1.ply comes from LiDARScan's MeshPLY (ScanMeshTests)."""
+    from pathlib import Path
+
+    mesh = decode((Path(__file__).parent / "fixtures" / "mesh_v1.ply").read_bytes())
+    assert mesh.triangles.tolist() == [[0, 1, 2], [1, 3, 2], [4, 5, 6]]
+    assert mesh.vertices.tolist()[5] == [10.0, 9.0, 9.0]

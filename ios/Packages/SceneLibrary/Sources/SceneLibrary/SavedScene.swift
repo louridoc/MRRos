@@ -64,6 +64,8 @@ public struct SceneManifest: Sendable, Equatable, Codable {
     /// Always "base_link": points and boxes are robot-relative, so a scene survives re-placing.
     public var frameId: String
     public var pointCount: Int
+    /// Triangles in the optional `mesh.ply`; nil = no mesh (older scenes, or none captured).
+    public var triangleCount: Int?
     public var cropEnabled: Bool
     public var crop: BaseLinkBox
     public var exclusions: [BaseLinkBox]
@@ -93,24 +95,40 @@ public struct SceneManifest: Sendable, Equatable, Codable {
     }
 }
 
-/// A scene: manifest + its raw (unfiltered) points in base_link, ROS axes.
+/// A scene: manifest + its raw (unfiltered) points, and optionally the room mesh, in base_link.
 public struct SavedScene: Sendable, Equatable {
     public var manifest: SceneManifest
     public var points: PointCloud
+    public var mesh: ScanMesh?
 
-    public init(manifest: SceneManifest, points: PointCloud) {
+    public init(manifest: SceneManifest, points: PointCloud, mesh: ScanMesh? = nil) {
         var manifest = manifest
+        let mesh = mesh?.isEmpty == true ? nil : mesh
         manifest.pointCount = points.count
+        manifest.triangleCount = mesh?.triangleCount
         self.manifest = manifest
         self.points = points
+        self.mesh = mesh
     }
 
     /// Per-point classes in base_link with the scene's own boxes — what an upload straight from
     /// the list sends (`.kept` only). `liveRobot` adds the robot's current boxes (in base_link)
     /// when known: points where the robot is NOW can't be obstacles either.
     public func classify(liveRobot: [OrientedBox] = []) -> [PointClass] {
+        classify(points, liveRobot: liveRobot)
+    }
+
+    /// The mesh to upload (triangles kept by their centroid, same boxes), still in base_link.
+    public func filteredMeshForUpload(liveRobot: [OrientedBox] = []) -> ScanMesh? {
+        guard let mesh else { return nil }
+        let classes = classify(mesh.centroids(), liveRobot: liveRobot)
+        let kept = mesh.keepingTriangles(classes.map { $0 == .kept })
+        return kept.isEmpty ? nil : kept
+    }
+
+    private func classify(_ cloud: PointCloud, liveRobot: [OrientedBox]) -> [PointClass] {
         SceneFilter.classify(
-            points,
+            cloud,
             crop: manifest.cropEnabled ? manifest.crop.orientedInBaseLink : nil,
             exclusions: manifest.exclusions.map(\.orientedInBaseLink),
             robot: manifest.robotBoxes.map(\.orientedInBaseLink) + liveRobot,

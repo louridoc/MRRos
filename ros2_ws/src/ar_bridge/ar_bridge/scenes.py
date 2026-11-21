@@ -14,13 +14,15 @@ from pathlib import Path
 
 import numpy as np
 
+from ar_bridge import mesh_ply
 from ar_bridge.ply import DecodedCloud, PLYError, decode
 
 FORMAT_NAME = "mrros.scene"
 FORMAT_VERSION = 1
 MANIFEST = "scene.json"
 POINTS = "points.ply"
-FILES = (MANIFEST, POINTS)
+MESH = "mesh.ply"  # optional (M5c part 3)
+FILES = (MANIFEST, POINTS, MESH)
 
 # Folder names the app generates (name slug + date + suffix); anything with a path separator,
 # leading dot or "..", is refused.
@@ -86,6 +88,11 @@ class SceneLibrary:
         listed scene (manifest + points present) is always complete."""
         if name == MANIFEST:
             parse_manifest(data)
+        elif name == MESH:
+            try:
+                mesh_ply.decode(data)
+            except PLYError as e:
+                raise SceneError(400, f"mesh.ply: {e}") from e
         else:
             try:
                 decode(data)
@@ -103,13 +110,15 @@ class SceneLibrary:
             raise SceneError(404, f"scene {scene_id} not found")
         shutil.rmtree(folder)
 
-    def load(self, scene_id: str) -> tuple[dict, DecodedCloud]:
+    def load(self, scene_id: str) -> tuple[dict, DecodedCloud, "mesh_ply.DecodedMesh | None"]:
         manifest = parse_manifest(self.read(scene_id, MANIFEST))
         try:
             cloud = decode(self.read(scene_id, POINTS))
+            mesh_path = self._file(scene_id, MESH)
+            mesh = mesh_ply.decode(mesh_path.read_bytes()) if mesh_path.is_file() else None
         except PLYError as e:
-            raise SceneError(500, f"{scene_id}: points.ply unreadable: {e}") from e
-        return manifest, cloud
+            raise SceneError(500, f"{scene_id}: unreadable: {e}") from e
+        return manifest, cloud, mesh
 
     def _file(self, scene_id: str, name: str) -> Path:
         if name not in FILES:
@@ -145,10 +154,10 @@ def _stored_box(box: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return m, np.asarray(box["min"]), np.asarray(box["max"])
 
 
-def filter_for_upload(manifest: dict, cloud: DecodedCloud) -> DecodedCloud:
-    """The points the app would upload from this scene: drop the scan-time robot (padded),
-    exclusion boxes, and anything outside the crop when it's enabled."""
-    xyz = cloud.xyz.astype(np.float64)
+def _drop_mask(manifest: dict, xyz: np.ndarray) -> np.ndarray:
+    """True where a point (base_link) is dropped: inside the scan-time robot (padded) or an
+    exclusion box, or outside the crop when it's enabled."""
+    xyz = xyz.astype(np.float64)
     drop = np.zeros(len(xyz), dtype=bool)
     pad = float(manifest.get("robotPadding", 0.0))
     for box in manifest.get("robotBoxes", []):
@@ -157,9 +166,29 @@ def filter_for_upload(manifest: dict, cloud: DecodedCloud) -> DecodedCloud:
         drop |= _inside(xyz, *_yaw_box(box))
     if manifest.get("cropEnabled"):
         drop |= ~_inside(xyz, *_yaw_box(manifest["crop"]))
-    keep = ~drop
+    return drop
+
+
+def filter_for_upload(manifest: dict, cloud: DecodedCloud) -> DecodedCloud:
+    """The points the app would upload from this scene."""
+    keep = ~_drop_mask(manifest, cloud.xyz)
     return DecodedCloud(
         xyz=cloud.xyz[keep],
         confidence=None if cloud.confidence is None else cloud.confidence[keep],
         color=None if cloud.color is None else cloud.color[keep],
+    )
+
+
+def filter_mesh_for_upload(manifest: dict, mesh: "mesh_ply.DecodedMesh") -> "mesh_ply.DecodedMesh":
+    """The mesh the app would upload: triangles kept by their centroid (same boxes as the points),
+    unused vertices dropped and indices compacted in first-use order (as the Swift side does)."""
+    tri = mesh.triangles.astype(np.int64)
+    centroids = mesh.vertices[tri].astype(np.float64).mean(axis=1)
+    kept = tri[~_drop_mask(manifest, centroids)]
+    order, first = np.unique(kept.ravel(), return_index=True)
+    used = order[np.argsort(first)]  # vertices in order of first use
+    remap = np.full(len(mesh.vertices), -1, dtype=np.int64)
+    remap[used] = np.arange(len(used))
+    return mesh_ply.DecodedMesh(
+        vertices=mesh.vertices[used], triangles=remap[kept].astype(np.uint32).reshape(-1, 3)
     )

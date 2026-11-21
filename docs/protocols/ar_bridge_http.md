@@ -73,10 +73,10 @@ stored under the `scenes_dir` param (default `~/.mrros/scenes`; set it with
 | Method + path | Does |
 |---|---|
 | `GET /v0/scenes` | `{"scenes": [{"id", "manifest": {...}}]}`, newest first; folders without both files are skipped. |
-| `GET /v0/scenes/{id}/{file}` | `file` = `scene.json` or `points.ply`; anything else `404`. |
-| `PUT /v0/scenes/{id}/{file}` | Validated before writing (`400` on a bad manifest/PLY/id). Send `points.ply` first, `scene.json` last. |
+| `GET /v0/scenes/{id}/{file}` | `file` = `scene.json`, `points.ply` or (optional) `mesh.ply`; anything else `404`. |
+| `PUT /v0/scenes/{id}/{file}` | Validated before writing (`400` on a bad manifest/PLY/id). Send `points.ply` (and `mesh.ply`) first, `scene.json` last. |
 | `DELETE /v0/scenes/{id}` | Removes the folder (`404` if missing). |
-| `POST /v0/scenes/{id}/publish` | Filters the scene with its own boxes and scan-time robot, publishes it as the live scan (`live_scan`, base_link) exactly like an upload: octomap cleared first, latched, re-sent to late joiners. → upload result + `scene`, `name`. |
+| `POST /v0/scenes/{id}/publish` | Filters the scene with its own boxes and scan-time robot, publishes it as the live scan (`live_scan`, base_link) exactly like an upload: octomap cleared first, latched, re-sent to late joiners; its mesh, if any, becomes the collision object. → upload result + `scene`, `name` (+ `triangles`, `mesh_applied`). |
 
 Ids must match `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}` (no `..`), else `400`.
 

@@ -9,7 +9,8 @@ param `scenes_dir`). Writers: `ios/Packages/SceneLibrary` (Swift) and `ar_bridge
 | File | Content |
 |---|---|
 | `points.ply` | The raw scan, **unfiltered**, in `base_link`, ROS axes (binary PLY, same codec as `POST /v0/cloud`). |
-| `scene.json` | Manifest below. Written **after** the points: a folder with a manifest is complete. |
+| `mesh.ply` | *Optional* (M5c part 3): ARKit's room mesh, raw, base_link (binary PLY with triangles, the `POST /v0/scene_mesh` format). |
+| `scene.json` | Manifest below. Written **after** the other files: a folder with a manifest is complete. |
 
 `<id>` is the folder name: `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`. The app generates
 `<name-slug>_<yyyyMMdd-HHmmss UTC>_<4 hex>`.
@@ -26,6 +27,7 @@ param `scenes_dir`). Writers: `ios/Packages/SceneLibrary` (Swift) and `ar_bridge
 | `robotName` | string? | `robot_description` name at save time; loading warns on a mismatch. |
 | `joints` | {name: rad} | Joint angles at save time (informational). |
 | `pointCount` | int | |
+| `triangleCount` | int? | Triangles in `mesh.ply`; absent = no mesh. Optional key, so v1 is unchanged. |
 | `cropEnabled`, `crop` | bool, Box | Crop box: points outside it are dropped when enabled. |
 | `exclusions` | [Box] | Points inside any are dropped. |
 | `robotBoxes` | [StoredBox] | The robot's link boxes **at scan time**. Dropped (with `robotPadding`) on every later filter, so the real robot's old pose can't reappear as an obstacle after it moves. |
@@ -38,5 +40,7 @@ param `scenes_dir`). Writers: `ios/Packages/SceneLibrary` (Swift) and `ar_bridge
 ## Filtering (what an upload sends)
 
 Keep a point unless it is inside a robot box (padded), inside an exclusion box, or (crop enabled)
-outside the crop. Containment is inclusive. The app additionally drops points inside the *live*
+outside the crop. Mesh triangles are kept or dropped by their **centroid** with the same rule;
+unused vertices are dropped and indices renumbered in first-use order (Swift and Python agree
+exactly — fixture `expected_kept_mesh.ply`). Containment is inclusive. The app additionally drops points inside the *live*
 robot when one is placed; ar_bridge's `publish` uses the scene alone.

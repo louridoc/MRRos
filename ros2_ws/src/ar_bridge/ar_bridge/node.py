@@ -39,7 +39,7 @@ from ar_bridge.http_api import Handlers, MeshResult, make_app
 from ar_bridge.late_join import LateJoinWatcher
 from ar_bridge.mesh_resolver import MeshCache, resolve_mesh
 from ar_bridge.ply import DecodedCloud, PLYError, decode, merge
-from ar_bridge.scenes import SceneLibrary, filter_for_upload
+from ar_bridge.scenes import SceneLibrary, filter_for_upload, filter_mesh_for_upload
 
 _LATCHED_QOS = QoSProfile(
     depth=1,
@@ -159,14 +159,26 @@ class ARBridge(Node):
         """POST /v0/scenes/{id}/publish: a stored scene, filtered with its own boxes and scan-time
         robot exactly like the app's upload-from-list, published as the live scan."""
         loop = asyncio.get_running_loop()
-        manifest, kept = await loop.run_in_executor(None, self._load_filtered, scene_id)
+        manifest, kept, mesh = await loop.run_in_executor(None, self._load_filtered, scene_id)
         self._clouds["live_scan"] = kept
         result = await self._publish(kept, frame_id="base_link", name="live_scan", label=scene_id)
-        return dict(result, scene=scene_id, name=manifest.get("name"))
+        out = dict(result, scene=scene_id, name=manifest.get("name"))
+        if mesh is not None and len(mesh.triangles) and self._apply_scene is not None:
+            obj = await loop.run_in_executor(
+                None,
+                lambda: collision_object(
+                    mesh, frame_id="base_link", object_id=self.collision_object_id
+                ),
+            )
+            self._last_mesh, self._mesh_frame = mesh, "base_link"
+            out["triangles"] = int(len(mesh.triangles))
+            out["mesh_applied"] = await self._apply(obj, timeout_s=30.0)
+        return out
 
-    def _load_filtered(self, scene_id: str) -> tuple[dict, DecodedCloud]:
-        manifest, cloud = self.scenes.load(scene_id)
-        return manifest, filter_for_upload(manifest, cloud)
+    def _load_filtered(self, scene_id: str):
+        manifest, cloud, mesh = self.scenes.load(scene_id)
+        kept_mesh = filter_mesh_for_upload(manifest, mesh) if mesh is not None else None
+        return manifest, filter_for_upload(manifest, cloud), kept_mesh
 
     async def _publish(
         self, decoded: DecodedCloud, *, frame_id: str, name: str, label: str

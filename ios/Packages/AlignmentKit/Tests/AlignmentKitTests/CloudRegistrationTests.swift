@@ -23,7 +23,7 @@ struct CloudRegistrationTests {
     }
 
     @Test func rotatedToROSAxesOnEmptyCloudStaysEmpty() {
-        #expect(CloudRegistration.rotatedToROSAxes(.empty).isEmpty)
+        #expect(CloudRegistration.rotatedToROSAxes(PointCloud.empty).isEmpty)
     }
 
     @Test func registeringAgainstIdentityAlignmentEqualsPlainRotation() {
@@ -72,5 +72,17 @@ struct CloudRegistrationTests {
         for i in 0 ..< cloud.count {
             #expect(simd_length(back.point(at: i) - cloud.point(at: i)) < 1e-5)
         }
+    }
+
+    @Test func meshRegistrationMatchesCloudRegistration() {
+        let alignment = AlignmentTransform(position: SIMD3(0.5, -0.2, -1.5), yaw: 0.9)
+        let mesh = ScanMesh(vertices: [SIMD3(0.3, 0.1, -0.4), SIMD3(-1.2, 0.5, 1.1), SIMD3(2, -0.7, 0)], indices: [0, 1, 2])
+        let cloud = PointCloud(x: mesh.vertices.map(\.x), y: mesh.vertices.map(\.y), z: mesh.vertices.map(\.z))
+        let m = CloudRegistration.registering(mesh, against: alignment)
+        let c = CloudRegistration.registering(cloud, against: alignment)
+        for i in 0 ..< 3 {
+            #expect(simd_length(m.vertices[i] - c.point(at: i)) < 1e-6)
+        }
+        #expect(m.indices == mesh.indices)
     }
 }

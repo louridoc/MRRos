@@ -227,4 +227,14 @@ struct ARBridgeClientTests {
             try await ARBridgeClient(baseURL: baseURL, transport: mock).sceneFile(id: "x", file: "scene.json")
         }
     }
+
+    @Test func uploadSceneMeshPostsToTheMeshEndpoint() async throws {
+        let mock = MockHTTPTransport()
+        let body = #"{"triangles": 12, "vertices": 8, "object_id": "mrros_scan_mesh", "applied": true}"#
+        await mock.respond(whenURLContains: "/v0/scene_mesh", with: HTTPResponse(statusCode: 200, data: Data(body.utf8), headers: [:]))
+        let result = try await ARBridgeClient(baseURL: baseURL, transport: mock).uploadSceneMesh(Data([1]), frameId: "base_link")
+        #expect(result == SceneMeshResult(triangles: 12, vertices: 8, objectId: "mrros_scan_mesh", applied: true))
+        #expect(await mock.requestedURLs.first?.query == "frame_id=base_link")
+        #expect(await mock.postedBodies == [Data([1])])
+    }
 }

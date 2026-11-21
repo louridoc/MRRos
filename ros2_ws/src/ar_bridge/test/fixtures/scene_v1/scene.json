@@ -70,5 +70,6 @@
   ],
   "robotName" : "ur10e",
   "robotPadding" : 0.03,
+  "triangleCount" : 1029,
   "version" : 1
 }

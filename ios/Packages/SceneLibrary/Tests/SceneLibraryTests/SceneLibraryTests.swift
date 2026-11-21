@@ -62,6 +62,22 @@ struct SceneFilteringTests {
         }
     }
 
+    @Test func meshTrianglesAreFilteredByCentroidWithTheSameBoxes() {
+        let robot = StoredBox(
+            baseLinkFromBox: matrix_identity_float4x4, min: SIMD3(-0.2, -0.2, 0), max: SIMD3(0.2, 0.2, 1)
+        )
+        // Triangle 0 centred at the robot (0, 0, 0.5); triangle 1 centred at (2, 0, 0.5).
+        let mesh = ScanMesh(
+            vertices: [SIMD3(-0.1, 0, 0.4), SIMD3(0.1, 0, 0.4), SIMD3(0, 0, 0.7),
+                       SIMD3(1.9, 0, 0.4), SIMD3(2.1, 0, 0.4), SIMD3(2, 0, 0.7)],
+            indices: [0, 1, 2, 3, 4, 5]
+        )
+        let scene = SavedScene(manifest: manifest(robotBoxes: [robot]), points: points, mesh: mesh)
+        let kept = scene.filteredMeshForUpload()
+        #expect(kept?.triangleCount == 1)
+        #expect(kept?.vertices.first == SIMD3(1.9, 0, 0.4))
+    }
+
     @Test func pointCountFollowsThePoints() {
         #expect(SavedScene(manifest: manifest(), points: points).manifest.pointCount == 4)
     }
@@ -168,13 +184,20 @@ struct CrossLanguageFixture {
             robotBoxes: [StoredBox(baseLinkFromBox: linkPose, min: SIMD3(-0.1, -0.3, -0.1), max: SIMD3(0.1, 0.3, 0.2))],
             robotPadding: 0.03
         )
-        let scene = SavedScene(manifest: manifest, points: PointCloud(x: xs, y: ys, z: zs))
+        // A mesh over the same grid: one triangle per 3 consecutive points.
+        let verts = (0 ..< xs.count).map { SIMD3(xs[$0], ys[$0], zs[$0]) }
+        let mesh = ScanMesh(vertices: verts, indices: (0 ..< UInt32(verts.count / 3 * 3)).map { $0 })
+        let scene = SavedScene(manifest: manifest, points: PointCloud(x: xs, y: ys, z: zs), mesh: mesh)
         let folder = URL(fileURLWithPath: dir).appendingPathComponent("scene_v1", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try PLYCodec.encode(scene.points).write(to: folder.appendingPathComponent(SceneStore.pointsFile))
         try SceneStore.encodeManifest(scene.manifest).write(to: folder.appendingPathComponent(SceneStore.manifestFile))
         let kept = scene.filteredForUpload()
         try PLYCodec.encode(kept).write(to: folder.appendingPathComponent("expected_kept.ply"))
+        try MeshPLY.encode(mesh).write(to: folder.appendingPathComponent(SceneStore.meshFile))
+        let keptMesh = scene.filteredMeshForUpload() ?? .empty
+        try MeshPLY.encode(keptMesh).write(to: folder.appendingPathComponent("expected_kept_mesh.ply"))
+        print("fixture mesh: \(mesh.triangleCount) triangles, kept \(keptMesh.triangleCount)")
         let classes = scene.classify()
         print("fixture: \(scene.points.count) points, kept \(kept.count), robot \(classes.filter { $0 == .robot }.count), excluded \(classes.filter { $0 == .excluded }.count)")
     }
@@ -202,10 +225,10 @@ struct SceneTransferTests {
         let source = store()
         let scene = SavedScene(manifest: manifest(name: "cell"), points: PointCloud(x: [1, 2], y: [3, 4], z: [5, 6]))
         let id = try source.save(scene)
-        let (m, p) = try source.files(id)
+        let files = try source.files(id)
         let mock = MockHTTPTransport()
-        await mock.respond(whenURLContains: "/\(SceneStore.manifestFile)", with: HTTPResponse(statusCode: 200, data: m, headers: [:]))
-        await mock.respond(whenURLContains: "/\(SceneStore.pointsFile)", with: HTTPResponse(statusCode: 200, data: p, headers: [:]))
+        await mock.respond(whenURLContains: "/\(SceneStore.manifestFile)", with: HTTPResponse(statusCode: 200, data: files.manifest, headers: [:]))
+        await mock.respond(whenURLContains: "/\(SceneStore.pointsFile)", with: HTTPResponse(statusCode: 200, data: files.points, headers: [:]))
         let dest = store()
         try await SceneTransfer.pull(id, from: ARBridgeClient(baseURL: base, transport: mock), into: dest)
         #expect(try dest.load(id) == scene)
@@ -220,5 +243,28 @@ struct SceneTransferTests {
             try await SceneTransfer.pull("x", from: ARBridgeClient(baseURL: base, transport: mock), into: dest)
         }
         #expect(dest.list().isEmpty)
+    }
+
+    @Test func meshTravelsWithTheSceneBothWays() async throws {
+        let source = store()
+        let mesh = ScanMesh(vertices: [SIMD3(0, 0, 0), SIMD3(1, 0, 0), SIMD3(0, 1, 0)], indices: [0, 1, 2])
+        let scene = SavedScene(manifest: manifest(), points: PointCloud(x: [1], y: [2], z: [3]), mesh: mesh)
+        let id = try source.save(scene)
+        #expect(try source.load(id) == scene)
+        #expect(try source.load(id).manifest.triangleCount == 1)
+
+        let push = MockHTTPTransport()
+        await push.respond(whenURLContains: "/v0/scenes/", with: HTTPResponse(statusCode: 200, data: Data("{}".utf8), headers: [:]))
+        try await SceneTransfer.push(id, from: source, to: ARBridgeClient(baseURL: base, transport: push))
+        #expect(await push.puts.map(\.url.lastPathComponent) == [SceneStore.pointsFile, SceneStore.meshFile, SceneStore.manifestFile])
+
+        let files = try source.files(id)
+        let pull = MockHTTPTransport()
+        for (name, data) in [(SceneStore.manifestFile, files.manifest), (SceneStore.pointsFile, files.points), (SceneStore.meshFile, files.mesh ?? Data())] {
+            await pull.respond(whenURLContains: "/\(name)", with: HTTPResponse(statusCode: 200, data: data, headers: [:]))
+        }
+        let dest = store()
+        try await SceneTransfer.pull(id, from: ARBridgeClient(baseURL: base, transport: pull), into: dest)
+        #expect(try dest.load(id) == scene)
     }
 }

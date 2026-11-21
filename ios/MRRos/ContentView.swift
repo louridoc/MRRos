@@ -241,6 +241,14 @@ struct ScanActions: View {
     @Bindable var scanScene: ScanScene
     @Bindable var robotScene: RobotScene
 
+    private var uploadIcon: String {
+        switch scanScene.uploadMode {
+        case .points: "arrow.up.circle"
+        case .mesh: "cube.transparent"
+        case .both: "square.stack.3d.up"
+        }
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             Button {
@@ -268,18 +276,23 @@ struct ScanActions: View {
             .disabled(scanScene.pointCount == 0 && scanScene.exclusionIDs.isEmpty)
             .accessibilityLabel("Clear scan and exclusion boxes")
 
-            Button {
-                scanScene.request = .upload
+            // Tap uploads with the current mode; long-press picks Points / Mesh / Both.
+            Menu {
+                Picker("Upload", selection: $scanScene.uploadMode) {
+                    ForEach(ScanScene.UploadMode.allCases) { Text($0.rawValue).tag($0) }
+                }
             } label: {
                 if scanScene.isUploading {
                     ProgressView()
                 } else {
-                    Image(systemName: "arrow.up.circle")
+                    Image(systemName: uploadIcon)
                 }
+            } primaryAction: {
+                scanScene.request = .upload
             }
             .buttonStyle(.bordered)
             .disabled(scanScene.pointCount == 0 || scanScene.isUploading)
-            .accessibilityLabel("Upload scan")
+            .accessibilityLabel("Upload scan (\(scanScene.uploadMode.rawValue))")
 
             // Boxes live in base_link, so they need a placed robot.
             Toggle(isOn: $scanScene.cropEnabled) {

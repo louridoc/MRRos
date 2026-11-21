@@ -23,6 +23,26 @@ final class ScanScene {
         case uploadScene(id: String)
     }
 
+    /// What Upload sends (M5c): the point cloud (MoveIt octomap, self-filtered there too), the
+    /// room mesh (one MoveIt collision object: exact surfaces, the cuMotion input; NOT
+    /// self-filtered by MoveIt, so it relies on this app's robot filter), or both.
+    enum UploadMode: String, CaseIterable, Identifiable {
+        case points = "Points", mesh = "Mesh", both = "Both"
+        var id: String {
+            rawValue
+        }
+
+        var sendsPoints: Bool {
+            self != .mesh
+        }
+
+        var sendsMesh: Bool {
+            self != .points
+        }
+    }
+
+    var uploadMode: UploadMode = .points
+
     // MARK: Saved scenes (M5c)
 
     /// Rows for the Scenes sheet; refreshed by the coordinator after save/rename/delete.

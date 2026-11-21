@@ -505,3 +505,10 @@ Findings log:
       empty cloud, and the late-join re-send cleared the octomap and was throttled too. Now: one
       re-send 1.5 s after every publish; re-sends never clear. Verified: 2 fresh CRX starts × (3
       points + 1 mesh) all pass, first upload right after start included; UR10e restart still OK.
+- [x] Part 3b/c, app mesh + scenes with mesh (2026-11-21): LiDARScan `ScanMesh`/`MeshPLY` (Python
+      decodes the Swift-written mesh exactly); scene fixture regenerated with a mesh — Python's
+      centroid filter keeps exactly Swift's 392 of 1029 triangles; live: fixture pushed with mesh,
+      published → 840 pts + 392 triangles, `mrros_scan_mesh` in MoveIt's world.
+- [ ] Device: Upload long-press → Mesh: RViz MotionPlanning shows the room as a mesh; the real
+      robot's own surfaces are NOT in it (else MoveIt says the start state is in collision).
+- [ ] Device: Both; Clear empties both; save a scene with mesh, upload it from the list as Mesh.

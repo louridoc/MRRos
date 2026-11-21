@@ -6,9 +6,16 @@ import numpy as np
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+from ar_bridge import mesh_ply
 from ar_bridge.http_api import Handlers, make_app
 from ar_bridge.ply import decode, encode
-from ar_bridge.scenes import SceneError, SceneLibrary, filter_for_upload, parse_manifest
+from ar_bridge.scenes import (
+    SceneError,
+    SceneLibrary,
+    filter_for_upload,
+    filter_mesh_for_upload,
+    parse_manifest,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "scene_v1"
 
@@ -56,7 +63,8 @@ def test_library_round_trip_list_and_delete(tmp_path: Path) -> None:
     old = _manifest(createdAt="2025-01-01T00:00:00Z")
     lib.write("old_1", "scene.json", json.dumps(old).encode())
     assert [r["id"] for r in lib.list()] == ["bench_1", "old_1"]
-    manifest, cloud = lib.load("bench_1")
+    manifest, cloud, mesh = lib.load("bench_1")
+    assert mesh is None
     assert manifest["name"] == "bench" and cloud.count == 2
     lib.delete("bench_1")
     assert [r["id"] for r in lib.list()] == ["old_1"]
@@ -123,3 +131,19 @@ async def test_http_push_list_pull_publish_delete(tmp_path: Path) -> None:
 async def test_scene_routes_are_501_when_unwired() -> None:
     async with TestClient(TestServer(make_app(Handlers()))) as c:
         assert (await c.get("/v0/scenes")).status == 501
+
+
+def test_mesh_filter_matches_swift_exactly() -> None:
+    """Same fixture, mesh part: triangles by centroid, compacted vertices in first-use order."""
+    manifest = parse_manifest((FIXTURE / "scene.json").read_bytes())
+    mesh = mesh_ply.decode((FIXTURE / "mesh.ply").read_bytes())
+    expected = mesh_ply.decode((FIXTURE / "expected_kept_mesh.ply").read_bytes())
+    kept = filter_mesh_for_upload(manifest, mesh)
+    np.testing.assert_array_equal(kept.triangles, expected.triangles)
+    np.testing.assert_array_equal(kept.vertices, expected.vertices)
+
+
+def test_fixture_with_mesh_loads(tmp_path: Path) -> None:
+    shutil.copytree(FIXTURE, tmp_path / "scene_v1")
+    _, cloud, mesh = SceneLibrary(tmp_path).load("scene_v1")
+    assert cloud.count == 3087 and mesh is not None and len(mesh.triangles) == 1029
