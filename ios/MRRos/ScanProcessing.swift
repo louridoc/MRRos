@@ -64,6 +64,15 @@ actor ScanProcessor {
         return grid.cloud()
     }
 
+    /// Replaces the scan with `cloud` (already in AR world) — loading a saved scene. Later
+    /// captures add to it as usual.
+    func load(_ cloud: PointCloud, epoch: Int) -> PointCloud {
+        adopt(epoch)
+        grid.removeAll()
+        grid.add(cloud)
+        return grid.cloud()
+    }
+
     /// Releases the grid's memory after a Clear even if no capture follows.
     func release(epoch: Int) {
         adopt(epoch)

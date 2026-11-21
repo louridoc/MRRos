@@ -13,6 +13,12 @@ public enum CloudRegistration {
         mapPoints(cloud) { FrameConventions.toROS(point: alignment.pointInBaseLink($0)) }
     }
 
+    /// The inverse of `registering`: a `base_link` cloud (ROS axes) placed back in AR world for
+    /// the given alignment — how a saved scene is shown again after re-placing the robot.
+    public static func toWorld(_ cloud: PointCloud, from alignment: AlignmentTransform) -> PointCloud {
+        mapPoints(cloud) { alignment.worldPoint(fromBaseLink: $0) }
+    }
+
     /// `cloud`'s raw AR-world points rotated into ROS axis convention only, with no
     /// registration — the unregistered fallback when nothing has been aligned yet.
     public static func rotatedToROSAxes(_ cloud: PointCloud) -> PointCloud {

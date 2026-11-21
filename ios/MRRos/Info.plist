@@ -22,6 +22,8 @@
 	<string>1</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_rosbridge._tcp</string>
@@ -31,6 +33,8 @@
 	<string>Camera is used for augmented reality and LiDAR scanning.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connects to the ROS 2 bridge on your local network.</string>
+	<key>UIFileSharingEnabled</key>
+	<true/>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIRequiredDeviceCapabilities</key>

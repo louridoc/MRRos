@@ -66,6 +66,9 @@ struct ContentView: View {
         .sheet(isPresented: $showConnection) {
             ConnectionSheet(session: session)
         }
+        .sheet(isPresented: $scanScene.showScenes) {
+            ScenesSheet(scanScene: scanScene, robotScene: scene)
+        }
     }
 }
 
@@ -240,6 +243,14 @@ struct ScanActions: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            Button {
+                scanScene.showScenes = true
+            } label: {
+                Image(systemName: "folder")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Saved scenes")
+
             Button {
                 scanScene.request = .capture
             } label: {

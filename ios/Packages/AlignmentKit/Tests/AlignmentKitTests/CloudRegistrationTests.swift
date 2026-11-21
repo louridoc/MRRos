@@ -62,4 +62,15 @@ struct CloudRegistrationTests {
         )
         #expect(registered.count == cloud.count)
     }
+
+    @Test func toWorldUndoesRegistering() {
+        let cloud = PointCloud(x: [0.3, -1.2, 2.0], y: [0.1, 0.5, -0.7], z: [-0.4, 1.1, 0.0])
+        let alignment = AlignmentTransform(position: SIMD3(0.5, -0.2, -1.5), yaw: 0.9)
+        let back = CloudRegistration.toWorld(
+            CloudRegistration.registering(cloud, against: alignment), from: alignment
+        )
+        for i in 0 ..< cloud.count {
+            #expect(simd_length(back.point(at: i) - cloud.point(at: i)) < 1e-5)
+        }
+    }
 }

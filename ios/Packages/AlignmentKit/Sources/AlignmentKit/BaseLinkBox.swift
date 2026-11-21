@@ -4,7 +4,7 @@ import simd
 /// A box defined in `base_link` (ROS axes, metres): centre, half-extents, and a yaw about base Z.
 /// The one type behind the scan crop box and the exclusion boxes — both are attached to the
 /// robot, so they move with its alignment.
-public struct BaseLinkBox: Sendable, Equatable {
+public struct BaseLinkBox: Sendable, Equatable, Codable {
     public var center: SIMD3<Float>
     public var half: SIMD3<Float>
     public var yaw: Float
@@ -28,6 +28,12 @@ public struct BaseLinkBox: Sendable, Equatable {
         var local = SIMD3<Float>.zero
         local[i] = 1
         return simd_quatf(angle: yaw, axis: SIMD3(0, 0, 1)).act(local)
+    }
+
+    /// In base_link itself — for filtering a cloud already expressed in base_link (a saved
+    /// scene uploaded without AR).
+    public var orientedInBaseLink: OrientedBox {
+        OrientedBox(worldFromBox: baseLinkFromBox, min: -half, max: half)
     }
 
     /// Placed in AR world for the given robot alignment, ready for `SceneFilter`.

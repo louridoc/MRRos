@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SceneLibrary
 
 /// UI-facing state of the environment scan: capture/clear/upload requests from the sheet,
 /// results from the AR coordinator. Mirrors `RobotScene`'s request/consume pattern.
@@ -14,7 +15,23 @@ final class ScanScene {
         case addExclusion
         /// Delete the selected exclusion box.
         case deleteSelected
+        /// Save the current scan, boxes and scan-time robot pose as a scene with this name.
+        case saveScene(name: String)
+        /// Replace the current scan with a saved scene (needs a placed robot).
+        case loadScene(id: String)
+        /// Send a saved scene to ROS without loading it into AR.
+        case uploadScene(id: String)
     }
+
+    // MARK: Saved scenes (M5c)
+
+    /// Rows for the Scenes sheet; refreshed by the coordinator after save/rename/delete.
+    var scenes: [SceneSummary] = []
+    var showScenes = false
+    /// Name of the scene currently loaded (or last saved), for the status line and save default.
+    var currentSceneName: String?
+    /// Busy flag for save/load/upload-from-list, so the sheet can disable its buttons.
+    var isWorkingOnScene = false
 
     /// Set by the UI; consumed (reset to nil) by the AR coordinator.
     var request: Request?
