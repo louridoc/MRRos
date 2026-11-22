@@ -26,6 +26,14 @@ struct ConnectionSheet: View {
                     LabeledContent("State", value: stateText)
                     if let err = session.lastError {
                         Text(err).font(.footnote).foregroundStyle(.red)
+                        // iOS reports a blocked Local Network permission as being "offline".
+                        if err.localizedCaseInsensitiveContains("offline") {
+                            Text("On a local network this usually means MRRos isn't allowed to reach it: "
+                                + "Settings > Privacy & Security > Local Network > MRRos. If MRRos isn't "
+                                + "listed, quit and reopen the app and allow the prompt.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     Button(session.isConnected ? "Disconnect" : "Connect") {
                         Task {
