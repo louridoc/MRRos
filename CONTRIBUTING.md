@@ -41,6 +41,7 @@ reworking it in a PR.
 | Liveness test (silent peer) | `tools/it-deadbridge.sh <distro>` |
 | Re-record rosbridge fixtures | `tools/ros.sh <distro> python tools/record-fixtures.py` (bringup running) |
 | New package | `tools/new-module.sh <Name> [Dep1,Dep2]` |
+| Regenerate the app icon | `uvx --with pillow python tools/icon/make_icon.py [--preview out.png]` (needs `rsvg-convert`) |
 | Format one file | `tools/hooks/format.sh <file>` (SwiftFormat / ruff) |
 
 Distro rules: ROS-side Python stays 3.10-compatible (Humble). The only file allowed to branch on
