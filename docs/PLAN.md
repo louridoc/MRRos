@@ -50,7 +50,7 @@ Changes to these go in `docs/adr/` as numbered ADRs.
 ### 3.1 Repository layout
 
 ```
-MRRosProject/
+MRRos/
 ├── README.md  CONTRIBUTING.md  SECURITY.md  LICENSE  THIRD_PARTY_NOTICES.md
 ├── docs/  PLAN.md  ARCHITECTURE.md  adr/  protocols/ar_bridge_http.md  testing.md
 ├── ios/

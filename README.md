@@ -53,8 +53,8 @@ and Lyrical.
 Clone the repository first:
 
 ```sh
-git clone https://github.com/louridoc/MRRosProject.git
-cd MRRosProject
+git clone https://github.com/louridoc/MRRos.git
+cd MRRos
 ```
 
 ### Option A: macOS (RoboStack, the tested path)
