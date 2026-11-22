@@ -38,11 +38,7 @@ jobs:
       - name: Unit tests
         run: cd ros2_ws && pytest -q
       - name: External sources for ${{ matrix.distro }}
-        run: |
-          while IFS=$'\t' read -r d name url ref; do
-            [ -z "$d" ] || [ "${d#\#}" != "$d" ] || [ "$d" != "${{ matrix.distro }}" ] && continue
-            git clone -q --branch "$ref" --depth 1 "$url" "ros2_ws/src/external/$name"
-          done < tools/external.repos.tsv
+        run: tools/fetch-external.sh ${{ matrix.distro }}
       - name: Build
         shell: bash
         run: |

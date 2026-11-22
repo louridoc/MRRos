@@ -392,7 +392,7 @@
    "file": "ur_description/meshes/ur20/visual/base.usdz",
    "sha256": "dc5673ad78ac29b3c3f6ddd7465529af5eedbd3b76fdf4d2940b0ec2ce05762c",
    "source": "ur_description@3.5.1",
-   "bytes": 1844913,
+   "bytes": 1845482,
    "tris": 2122,
    "bbox": [
     -0.12251037359237671,
@@ -410,7 +410,7 @@
    "file": "ur_description/meshes/ur20/visual/forearm.usdz",
    "sha256": "1b9523f0122f7b186a0b0223636b0713e908536f4812cb7ef3ead227e310f09b",
    "source": "ur_description@3.5.1",
-   "bytes": 2131677,
+   "bytes": 2132118,
    "tris": 4292,
    "bbox": [
     -0.07528947293758392,
@@ -428,7 +428,7 @@
    "file": "ur_description/meshes/ur20/visual/shoulder.usdz",
    "sha256": "4ac24b17acd73d47d6f4c213e2786abe4d491600363591790ceaa8f601474e20",
    "source": "ur_description@3.5.1",
-   "bytes": 1711443,
+   "bytes": 1711894,
    "tris": 1112,
    "bbox": [
     -0.09047393500804901,
@@ -446,7 +446,7 @@
    "file": "ur_description/meshes/ur20/visual/upperarm.usdz",
    "sha256": "550f87116f6f75588ee1ab028a1413cffe45546e5bda39a7e22a56888de9a4ad",
    "source": "ur_description@3.5.1",
-   "bytes": 2079869,
+   "bytes": 2080311,
    "tris": 3900,
    "bbox": [
     -0.08986285328865051,
@@ -464,7 +464,7 @@
    "file": "ur_description/meshes/ur20/visual/wrist1.usdz",
    "sha256": "40e172b209db1a89f2bc74e4120ab751ba6ca7a13b80aba4fc286280902e6483",
    "source": "ur_description@3.5.1",
-   "bytes": 1841810,
+   "bytes": 1842260,
    "tris": 2099,
    "bbox": [
     -0.05006510019302368,
@@ -482,7 +482,7 @@
    "file": "ur_description/meshes/ur20/visual/wrist2.usdz",
    "sha256": "ba20b26ac45e934efc804d3376fe5bf0d2c2fda6f9563a48b60d926e76404a43",
    "source": "ur_description@3.5.1",
-   "bytes": 1755003,
+   "bytes": 1755534,
    "tris": 1442,
    "bbox": [
     -0.05035638064146042,
@@ -500,7 +500,7 @@
    "file": "ur_description/meshes/ur20/visual/wrist3.usdz",
    "sha256": "8440f202606a4c1325a2f31b45ae19ab439c99db0842f2ce7637dd789563ead9",
    "source": "ur_description@3.5.1",
-   "bytes": 1831103,
+   "bytes": 1831560,
    "tris": 2020,
    "bbox": [
     -0.05000913143157959,
@@ -518,7 +518,7 @@
    "file": "ur_description/meshes/ur30/visual/forearm.usdz",
    "sha256": "70765d5e0ead8cffb7913c949a665e902e168696e7892b3525190236e389ff02",
    "source": "ur_description@3.5.1",
-   "bytes": 2148924,
+   "bytes": 2149340,
    "tris": 4420,
    "bbox": [
     -0.0752895250916481,
@@ -536,7 +536,7 @@
    "file": "ur_description/meshes/ur30/visual/upperarm.usdz",
    "sha256": "e36ac8d9508459e6d6b56b488da5e2cf12525319d9e1aa5d681cbb6d564d40b0",
    "source": "ur_description@3.5.1",
-   "bytes": 2088669,
+   "bytes": 2089087,
    "tris": 3964,
    "bbox": [
     -0.08997688442468643,

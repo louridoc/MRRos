@@ -54,7 +54,7 @@ EOF
 cat > "$PKG/Sources/$NAME/$NAME.swift" <<EOF
 import os
 
-/// Package-wide logger. Category = package name (see CONTRIBUTING.md conventions).
+/// Package-wide logger. Category = package name (see CONTRIBUTING.md).
 let log = Logger(subsystem: "io.github.louridoc.mrros", category: "$NAME")
 
 public enum ${NAME}Info {
@@ -74,4 +74,4 @@ import Testing
 EOF
 
 echo "created ios/Packages/$NAME (deps: ${DEPS:-none})"
-echo "next: add it to ios/project.yml 'packages:' and to CONTRIBUTING.md layout if it is a new layer"
+echo "next: add it to ios/project.yml 'packages:' and to CONTRIBUTING.md's layout if it is a new layer"

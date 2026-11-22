@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# Format hook: format the file just written/edited.
-# Reads the tool payload JSON on stdin; silent no-op for other file types.
+# Format one file in place: `tools/hooks/format.sh <file>`. Also usable as an editor/save hook
+# that passes {"tool_input": {"file_path": ...}} JSON on stdin. No-op for other file types.
 set -euo pipefail
-file="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("file_path",""))' 2>/dev/null || true)"
+if [[ $# -ge 1 ]]; then
+  file="$1"
+else
+  file="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("file_path",""))' 2>/dev/null || true)"
+fi
 [[ -z "$file" || ! -f "$file" ]] && exit 0
 case "$file" in
   *.swift) command -v swiftformat >/dev/null && swiftformat --quiet "$file" || true ;;

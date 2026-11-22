@@ -7,21 +7,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=tools/env.sh
 source "$ROOT/tools/env.sh"
 WS="$ROOT/ros2_ws"
-EXT="$WS/src/external"
 
 distro="$(mrros_distro "${1:-}")"; [[ $# -gt 0 ]] && shift
 
 # 1. external sources at the ref pinned for this distro
-mkdir -p "$EXT"
-while IFS=$'\t' read -r d name url ref; do
-  [[ -z "$d" || "$d" == \#* || "$d" != "$distro" ]] && continue
-  if [[ ! -d "$EXT/$name/.git" ]]; then
-    git clone -q "$url" "$EXT/$name"
-  fi
-  git -C "$EXT/$name" fetch -q origin "$ref"
-  git -C "$EXT/$name" checkout -q --detach FETCH_HEAD
-  echo "external/$name @ $ref ($(git -C "$EXT/$name" rev-parse --short HEAD))"
-done < "$ROOT/tools/external.repos.tsv"
+"$ROOT/tools/fetch-external.sh" "$distro"
 
 # 2. build inside the env
 cd "$WS"

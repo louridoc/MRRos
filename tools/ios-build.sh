@@ -12,8 +12,8 @@ else
   DEST="generic/platform=iOS Simulator"
 fi
 
+"$ROOT/tools/xcodegen.sh" > /dev/null
 cd "$ROOT/ios"
-xcodegen generate --quiet
 LOG="$(mktemp -t mrros_build).log"
 set +e
 xcodebuild -project MRRos.xcodeproj -scheme MRRos -destination "$DEST" \

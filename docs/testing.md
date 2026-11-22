@@ -17,7 +17,7 @@ Device checklists below are run manually at each milestone and the result noted 
 - [ ] CI green on humble / jazzy / lyrical — **blocked: GitHub Actions `startup_failure` at account level** (billing/private-repo minutes); re-check after fixing the account
 - [x] `tools/ios-test.sh` → all 10 packages green
 - [x] `tools/ios-build.sh` → BUILD SUCCEEDED (generic iOS Simulator)
-- [x] Signed device build (team XXXXXXXXXX), installed via `devicectl`, app shows the AR view on the iPhone (2026-11-15)
+- [x] Signed device build (personal team), installed via `devicectl`, app shows the AR view on the iPhone (2026-11-15)
 
 M0 exit test met except CI, which is an account issue, not a repo issue.
 
@@ -177,7 +177,7 @@ Built this pass:
   so pitch/roll aren't a real DOF worth exposing).
 - `AlignmentKit.CloudRegistration` — moved the point-cloud transform logic out of the app
   target into here (it's pure math, no ARKit dependency) so it's actually unit-testable, per
-  CONTRIBUTING.md's "no logic that belongs in a package" rule. `captureScan` now stores raw AR-world
+  the repo's "no logic that belongs in a package" rule. `captureScan` now stores raw AR-world
   points; both the ROS-axis rotation and the alignment registration happen together at upload
   time, recomputed from whatever the CURRENT alignment is — re-aligning doesn't require
   re-scanning.

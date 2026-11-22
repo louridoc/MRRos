@@ -1,7 +1,7 @@
 # MRRos — AR ↔ ROS 2 Scanning & Robot Alignment App
 
 **Status:** draft v0.1 (2026-11-15) — pending approval before scaffolding
-**Owner:** Christian Lourido (44009617+louridoc@users.noreply.github.com)
+**Owner:** Christian Lourido ([@louridoc](https://github.com/louridoc))
 
 ## 1. Goal
 
@@ -51,7 +51,7 @@ Changes to these go in `docs/adr/` as numbered ADRs.
 
 ```
 MRRosProject/
-├── CONTRIBUTING.md                     # conventions, commands, module map
+├── README.md  CONTRIBUTING.md  SECURITY.md  LICENSE  THIRD_PARTY_NOTICES.md
 ├── docs/  PLAN.md  ARCHITECTURE.md  adr/  protocols/ar_bridge_http.md  testing.md
 ├── ios/
 │   ├── project.yml               # XcodeGen → MRRos.xcodeproj (no pbxproj merge pain)
@@ -142,7 +142,7 @@ dev loop runs on one at a time.
 
 | M | Deliverable | Exit test |
 |---|-------------|-----------|
-| **M0** Environment | RoboStack env (Jazzy default; Humble/Lyrical creatable with one command) + `ar_dev_bringup` (rosbridge, rsp with selectable robot `robot:=crx30ia|crx20ial|ur30|ur20|ur10e`, mock joints, rviz); `fanuc_description` built from source; GitHub repo; XcodeGen project; package skeletons + CI (`swift test` on macOS, `xcodebuild` sim build); formatter hooks; XcodeBuildMCP wired. | `ros2 launch ar_dev_bringup dev.launch.py robot:=crx30ia` (and `ur30`) shows the robot in RViz; `swift test` green; app runs on device showing "Hello AR". |
+| **M0** Environment | RoboStack env (Jazzy default; Humble/Lyrical creatable with one command) + `ar_dev_bringup` (rosbridge, rsp with selectable robot `robot:=crx30ia|crx20ial|ur30|ur20|ur10e`, mock joints, rviz); `fanuc_description` built from source; GitHub repo; XcodeGen project; package skeletons + CI (`swift test` on macOS, `xcodebuild` sim build); formatter hooks. | `ros2 launch ar_dev_bringup dev.launch.py robot:=crx30ia` (and `ur30`) shows the robot in RViz; `swift test` green; app runs on device showing "Hello AR". |
 | **M1** Connectivity | `ROSBridgeClient` + `ROSMessages`: connect, list topics, subscribe `/tf*`, `/joint_states`, fetch `/robot_description`. Connection screen + live joint readout. | Unit tests on recorded frames; integration test against local rosbridge; app shows joints moving when the mock publisher moves. |
 | **M2a** Robot in AR (bundled) | `URDFKit`, `RobotModel`, `MeshProvider` tiers 1–2, `tools/meshes/convert.py`, bundled USDZ for the 5 priority robots. Spawn at a tapped anchor, animate from `/joint_states`. | FK vs `/tf` from rsp within 1e-4 m for all 5 robots (automated); each renders with correct meshes and moves with the mock joint publisher. |
 | **M2b** Robot in AR (any URDF) | `ar_bridge` mesh endpoint, `MeshProvider` tier 3, placeholder geometry fallback. | A robot not in the bundle (e.g. UR16e, or a CRX with a tool attached) spawns from the network alone. |
@@ -152,7 +152,7 @@ dev loop runs on one at a time.
 | **M5c** Scenes + adapters | (1) MoveIt late join: `ar_bridge` clears + re-publishes the last scan whenever `move_group` (re)appears. (2) **Saved scenes**: a scene = raw points (+ mesh after 3), crop/exclusion boxes, robot model and the **joint angles at scan time** (the robot filter must use those — the scan contains the real robot in that pose), name/date; stored in **base_link** so it survives re-placement and uploads without AR. New `SceneLibrary` package (format + conversions). App: Scenes list (save, load = replace current scan, upload without loading, rename, delete); files in Documents (Files app/AirDrop). `ar_bridge` keeps a scene library too (same PLY + JSON format; list/get/put/delete/publish over HTTP), so scenes move app ↔ ROS machine. (3) Mesh upload: ARKit mesh, filtered on the phone, → MoveIt `CollisionObject` in base_link (the input cuMotion uses); scenes include it. (4) GPU spike (x86 first, Thor later; Isaac ROS 4.x = Jazzy): cuMotion with our mesh, then nvblox from streamed depth frames. | (1) Upload, then start/restart MoveIt: obstacle present, plans avoid it. (2) Save, kill app, re-place robot, load: overlays correctly; upload from list without placing = same cloud in RViz; a scene pushed to and pulled from `ar_bridge` round-trips. (3) MoveIt plans around a scanned box sent as a mesh (UR + CRX). (4) Written decision: mesh, depth streaming, or both. |
 | **M6** Markers + lab | AprilTag/ArUco auto-alignment (OpenCV), persistence polish, integration with lab PC + real UR16e via `ur_robot_driver`. | End-to-end on real robot; distro/IP confirmed. |
 
-Each milestone: branch → PR → `/code-review` → merge; CHANGELOG entry; `docs/testing.md` checklist updated.
+Each milestone: branch → PR → review → merge; CHANGELOG entry; `docs/testing.md` checklist updated.
 
 ## 5. Testing strategy
 
@@ -168,18 +168,16 @@ Each milestone: branch → PR → `/code-review` → merge; CHANGELOG entry; `do
 
 ## 6. Development tooling
 
-- **`CONTRIBUTING.md`**: module map, build/test commands, conventions (Swift 6 strict concurrency,
-  no force-unwraps in packages, ROS naming), "how to add a module" recipe.
-  (rclpy/launch/MoveIt), `qa-reviewer` (test coverage + `/code-review`), `docs-writer`.
-  (`swift test` for all packages), `/ios-build` (XcodeGen + sim build), `/device-run`
-  (build & launch on the paired iPhone via XcodeBuildMCP), `/it` (integration suite),
-  `/new-module` (scaffold a package with tests + conventions entry).
-- **Hooks**: SwiftFormat/SwiftLint on edit of `*.swift`; `ruff` on `*.py`.
-- **MCP**: XcodeBuildMCP (`npx xcodebuildmcp@latest`) for
-  build/run/test/screenshots on simulator and device (code signing configured once in Xcode).
-- **Tools to install**: micromamba + RoboStack Jazzy (`ros-jazzy-desktop`, `rosbridge-suite`,
-  `ur-description`, `moveit`, `robot-state-publisher`, `joint-state-publisher-gui`),
-  `xcodegen`, `swiftlint`, `swiftformat`, Node (for XcodeBuildMCP), `uv`/`ruff`.
+- **Conventions and commands:** `CONTRIBUTING.md` (module map, build/test commands, Swift 6
+  strict concurrency, no force-unwraps in packages, ROS naming, "how to add a module").
+- **Scripts (`tools/`):** env setup, build/test wrappers, integration tests, mesh conversion,
+  `new-module.sh` (scaffold a package with tests).
+- **Formatting:** SwiftFormat/SwiftLint for `*.swift`, `ruff` for `*.py`
+  (`tools/hooks/format.sh <file>` formats one file).
+- **Device runs:** Xcode, or optionally XcodeBuildMCP for scripted build/run/screenshots.
+- **Tools to install:** micromamba + RoboStack (`ros-jazzy-desktop`, `rosbridge-suite`,
+  `ur-description`, `moveit`, …, see `tools/ros_env.template.yaml`), `xcodegen`, `swiftlint`,
+  `swiftformat`, `uv`/`ruff`.
 
 ## 7. Risks & mitigations
 
