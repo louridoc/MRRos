@@ -118,3 +118,17 @@ async def test_clear_cloud_unwired_is_501():
     app = make_app(Handlers())
     async with TestClient(TestServer(app)) as c:
         assert (await c.delete("/v0/cloud")).status == 501
+
+
+async def test_scene_mesh_handler_gets_body_and_query_or_501_without_moveit():
+    seen = {}
+
+    async def on_mesh(data: bytes, meta: dict[str, str]) -> dict:
+        seen["data"], seen["meta"] = data, meta
+        return {"triangles": 1}
+
+    async with TestClient(TestServer(make_app(Handlers(on_scene_mesh=on_mesh)))) as c:
+        r = await c.post("/v0/scene_mesh", params={"frame_id": "base_link"}, data=b"PLY")
+        assert r.status == 200 and seen == {"data": b"PLY", "meta": {"frame_id": "base_link"}}
+    async with TestClient(TestServer(make_app(Handlers()))) as c:
+        assert (await c.post("/v0/scene_mesh", data=b"")).status == 501

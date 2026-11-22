@@ -26,6 +26,7 @@ packages:
   MeshProvider:      { path: Packages/MeshProvider }
   RobotModel:        { path: Packages/RobotModel }
   AppCore:           { path: Packages/AppCore }
+  SceneLibrary:      { path: Packages/SceneLibrary }
 
 targets:
   MRRos:
@@ -44,6 +45,8 @@ targets:
       - package: RobotModel
       - package: URDFKit
       - package: MeshProvider
+      - package: SceneLibrary
+      - package: ARBridgeTransport
     info:
       path: MRRos/Info.plist
       properties:
@@ -55,6 +58,9 @@ targets:
         NSLocalNetworkUsageDescription: Connects to the ROS 2 bridge on your local network.
         NSBonjourServices: [_rosbridge._tcp, _mrros._tcp]
         ITSAppUsesNonExemptEncryption: false
+        # Saved scenes live in Documents/Scenes: visible in the Files app, AirDrop in/out (M5c).
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.louridoc.mrros

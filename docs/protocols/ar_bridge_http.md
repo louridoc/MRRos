@@ -33,6 +33,19 @@ Errors: `400` malformed PLY (bad magic/format/header, unsupported property order
 body) or missing/invalid `frame_id`/`mode`; `413` body over `client_max_size` (256 MiB, enforced
 by aiohttp before the handler runs).
 
+**Late subscribers (M5c).** The topic is latched, but MoveIt's octomap updater subscribes
+VOLATILE, so a move_group that starts or restarts after an upload would never get it. ar_bridge
+polls the topic's volatile subscriptions (1 Hz); when a new one appears it waits
+`late_join_delay_s` (default 3 s, < 0 disables) and re-publishes the last scan, **without**
+clearing the octomap (same content; a clear there wiped MoveIt's copy and the re-send could then be
+throttled away — measured). Nothing to re-send after a Clear.
+
+**Re-send (M5c).** MoveIt's updater drops a cloud that arrives within `1/max_update_rate` (1 s) of
+the previous one — e.g. an upload right after a Clear's empty cloud left the octomap empty
+(measured). ar_bridge therefore sends every published scan once more `republish_after_s` (1.5 s)
+later, unless newer content (upload, scene publish, Clear) replaced it. The octomap is cleared only
+when the content changes.
+
 ## DELETE /v0/cloud  (M5)
 The app's **Clear**. Query: `name` (optional — clears that accumulator; without it, all),
 `frame_id` (optional, for the empty message; default the node's `frame_id`).
@@ -41,6 +54,31 @@ latched cloud on the same topic, so RViz, MoveIt and late joiners all see the sc
 `.pcd` files already on disk are kept.
 → `200 {"cleared": "<name>|all", "topic": "/mrros/static_cloud", "moveit_octomap_cleared": bool}`
 Errors: `501` on an ar_bridge without this endpoint (the app reports "couldn't clear ROS side").
+
+## POST /v0/scene_mesh?frame_id=base_link  (M5c)
+The app's filtered scan **mesh** → one MoveIt collision object (`collision_object_id`, default
+`mrros_scan_mesh`) via `/apply_planning_scene` (ADD replaces the previous one). Body: binary PLY,
+`element vertex` (float x,y,z) + `element face` (`list uchar uint vertex_indices`, triangles only),
+see `ar_bridge/mesh_ply.py`. MoveIt does **not** self-filter collision objects: the robot's
+triangles must already be removed (the app does). `DELETE /v0/cloud` also removes the object; a
+(re)started move_group gets it re-applied (its `/planning_scene` subscription is watched).
+→ `200 {"triangles", "vertices", "object_id", "applied": bool}` (`applied` false = MoveIt not up
+yet; it is applied when move_group appears). `400` bad mesh/frame; `501` without moveit_msgs.
+
+## Scene library  (M5c)
+Saved scenes on the ROS machine, same folder format as the app (`docs/protocols/scene_format.md`),
+stored under the `scenes_dir` param (default `~/.mrros/scenes`; set it with
+`ros2 launch ar_bridge ar_bridge.launch.py scenes_dir:=…`, or in a copy of `config/ar_bridge.yaml`).
+
+| Method + path | Does |
+|---|---|
+| `GET /v0/scenes` | `{"scenes": [{"id", "manifest": {...}}]}`, newest first; folders without both files are skipped. |
+| `GET /v0/scenes/{id}/{file}` | `file` = `scene.json`, `points.ply` or (optional) `mesh.ply`; anything else `404`. |
+| `PUT /v0/scenes/{id}/{file}` | Validated before writing (`400` on a bad manifest/PLY/id). Send `points.ply` (and `mesh.ply`) first, `scene.json` last. |
+| `DELETE /v0/scenes/{id}` | Removes the folder (`404` if missing). |
+| `POST /v0/scenes/{id}/publish` | Filters the scene with its own boxes and scan-time robot, publishes it as the live scan (`live_scan`, base_link) exactly like an upload: octomap cleared first, latched, re-sent to late joiners; its mesh, if any, becomes the collision object. → upload result + `scene`, `name` (+ `triangles`, `mesh_applied`). |
+
+Ids must match `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}` (no `..`), else `400`.
 
 ## GET /v0/mesh?uri=package://pkg/path.dae  (M2b)
 → `200` body = **Wavefront OBJ** bytes (`Content-Type: model/obj`), header `X-Mesh-SHA256` =
@@ -71,3 +109,6 @@ when no manifest entry names the file explicitly.
   `501` dropped from its error set now that it's wired; `mode=append`'s accumulation key and
   backfill semantics specified above once actually built, instead of left open in the draft.
 - v0 (2026-11-18): `DELETE /v0/cloud` added; uploads clear MoveIt's octomap first; cloud stamp 0.
+- v0 (2026-11-21): last scan re-published to late VOLATILE subscribers (move_group (re)start).
+- v0 (2026-11-21): scene library endpoints (`/v0/scenes...`).
+- v0 (2026-11-21): `POST /v0/scene_mesh`; scans re-sent once after 1.5 s; late-join re-send no longer clears.

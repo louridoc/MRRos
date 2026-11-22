@@ -1,0 +1,14 @@
+# ar_bridge parameters. Copy this file into your own workspace/config and pass it with
+#   ros2 launch ar_bridge ar_bridge.launch.py params_file:=/path/to/ar_bridge.yaml
+# or override single values on the command line (see ar_bridge.launch.py). Paths may use "~".
+ar_bridge:
+  ros__parameters:
+    http_port: 8765                        # the app talks to http://<this host>:<port>
+    frame_id: base_link                    # default frame for an empty (cleared) cloud
+    cloud_topic: /mrros/static_cloud       # latched PointCloud2 (MoveIt octomap input)
+    output_dir: ~/.mrros/clouds            # every upload is also written here (.pcd)
+    scenes_dir: ~/.mrros/scenes            # saved-scene library (M5c)
+    mesh_cache_dir: ~/.mrros/mesh_cache    # converted robot meshes served to the app
+    clear_octomap_service: /clear_octomap  # MoveIt's; "none" disables clearing
+    republish_after_s: 1.5                 # resend each scan once (MoveIt drops clouds < 1 s apart)
+    late_join_delay_s: 3.0                 # re-send the scan to a (re)started move_group; < 0 off

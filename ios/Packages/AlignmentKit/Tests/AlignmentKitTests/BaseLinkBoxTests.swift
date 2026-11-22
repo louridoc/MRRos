@@ -1,4 +1,5 @@
 @testable import AlignmentKit
+import Foundation
 import simd
 import Testing
 
@@ -29,5 +30,18 @@ struct BaseLinkBoxTests {
         #expect(simd_length(box.axisInBaseLink(0) - SIMD3(0, 1, 0)) < 1e-6)
         #expect(simd_length(box.axisInBaseLink(1) - SIMD3(-1, 0, 0)) < 1e-6)
         #expect(simd_length(box.axisInBaseLink(2) - SIMD3(0, 0, 1)) < 1e-6)
+    }
+
+    @Test func baseLinkPlacementAgreesWithWorldPlacement() {
+        let box = BaseLinkBox(center: SIMD3(0.4, -0.2, 0.3), half: SIMD3(0.1, 0.2, 0.05), yaw: 0.7)
+        for p: SIMD3<Float> in [SIMD3(0.4, -0.2, 0.3), SIMD3(0.5, -0.05, 0.32), SIMD3(0.7, -0.2, 0.3)] {
+            #expect(box.orientedInBaseLink.contains(p) == box.oriented(in: alignment).contains(world(p)))
+        }
+    }
+
+    @Test func codableRoundTrip() throws {
+        let box = BaseLinkBox(center: SIMD3(1, 2, 3), half: SIMD3(0.1, 0.2, 0.3), yaw: -0.4)
+        let decoded = try JSONDecoder().decode(BaseLinkBox.self, from: JSONEncoder().encode(box))
+        #expect(decoded == box)
     }
 }

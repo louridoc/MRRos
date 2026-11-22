@@ -42,7 +42,7 @@ from tf2_ros import Buffer, TransformListener
 
 sys.path.insert(0, "ros2_ws/src/ar_bridge")
 sys.path.insert(0, "ros2_ws/src/ar_dev_bringup")
-from ar_bridge import ply  # noqa: E402
+from ar_bridge import mesh_ply, ply  # noqa: E402
 from ar_dev_bringup.robots import ROBOTS  # noqa: E402
 
 
@@ -185,6 +185,32 @@ def wall(arm_az: float, side: float) -> np.ndarray:
     return np.stack([r.ravel() * math.cos(az), r.ravel() * math.sin(az), z.ravel()], axis=1)
 
 
+def wall_mesh(arm_az: float, side: float) -> tuple[np.ndarray, np.ndarray]:
+    """The same wall as `wall`, as a 4 cm thick box of 12 triangles (the --mesh path)."""
+    az = arm_az + side * math.radians(45)
+    along = np.array([math.cos(az), math.sin(az), 0.0])
+    normal = np.array([-math.sin(az), math.cos(az), 0.0])
+    corners = [
+        r * along + t * normal + np.array([0, 0, z])
+        for r in (0.7, 1.5)
+        for t in (-0.02, 0.02)
+        for z in (0.0, 1.2)
+    ]
+    # corner index = 4*r + 2*t + z (each 0/1); two triangles per box face
+    faces = [
+        (0, 1, 3), (0, 3, 2), (4, 6, 7), (4, 7, 5),  # r = 0.7, r = 1.5
+        (0, 4, 5), (0, 5, 1), (2, 3, 7), (2, 7, 6),  # t = -, t = +
+        (0, 2, 6), (0, 6, 4), (1, 5, 7), (1, 7, 3),  # z = 0, z = 1.2
+    ]
+    return np.array(corners, np.float32), np.array(faces, np.uint32)
+
+
+def _request(url: str, method: str, data: bytes | None = None) -> str:
+    req = urllib.request.Request(url, data=data, method=method)
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return resp.read().decode()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--robot", required=True)
@@ -198,14 +224,32 @@ def main() -> int:
         default=0.0,
         help="optional wait after MoveIt's services appear before uploading",
     )
+    ap.add_argument(
+        "--no-upload",
+        action="store_true",
+        help="check the scene MoveIt already has (no clear, no upload) — e.g. after restarting "
+        "move_group, to test that ar_bridge re-published the last scan to it",
+    )
+    ap.add_argument(
+        "--mesh",
+        action="store_true",
+        help="upload the wall as a scan MESH (MoveIt collision object via ar_bridge) instead of "
+        "points; no robot geometry is sent (the phone filters it out of meshes)",
+    )
+    ap.add_argument(
+        "--clear-after",
+        action="store_true",
+        help="finally DELETE /v0/cloud (the app's Clear) and check the obstacle is gone",
+    )
     args = ap.parse_args()
     spec = ROBOTS[args.robot]
 
     rclpy.init()
     node = Check(spec)
-    node.wait(lambda: node.joints is not None and node.urdf is not None, 15, "/joint_states + URDF")
+    # 60 s: a freshly launched stack (MoveIt included) takes a while to come up
+    node.wait(lambda: node.joints is not None and node.urdf is not None, 60, "/joint_states + URDF")
     for c in (node.validity, node.planner, node.clear):
-        if not c.wait_for_service(timeout_sec=30):
+        if not c.wait_for_service(timeout_sec=60):
             raise TimeoutError(f"{c.srv_name} (is moveit.launch.py running?)")
     # Not needed since ar_bridge stamps clouds 0 (see node.py); kept for experiments.
     time.sleep(args.settle)
@@ -245,20 +289,27 @@ def main() -> int:
     arm_az = math.atan2(reach[:, 1].mean(), reach[:, 0].mean())
     print(f"sampled {len(robot)} points on the robot's collision surfaces")
 
-    # The octomap accumulates across clouds: start from empty so earlier runs can't leak in.
-    node.call(node.clear, Empty.Request())
     results = {}
-    results["halfway valid before upload"] = node.valid(halfway)
+    if args.no_upload:
+        print("--no-upload: checking the scene MoveIt already has")
+    else:
+        # Start from an empty scene so earlier runs can't leak in: the app's Clear empties both
+        # the octomap and the scan-mesh collision object.
+        print("cleared:", _request(f"{args.ar_bridge}/v0/cloud", "DELETE"))
+        node.call(node.clear, Empty.Request())
+        results["halfway valid before upload"] = node.valid(halfway)
 
-    pts = np.concatenate([wall(arm_az, side), robot]).astype(np.float32)
-    req = urllib.request.Request(
-        f"{args.ar_bridge}/v0/cloud?frame_id=base_link&name=moveit_check",
-        data=ply.encode(pts),
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        print("uploaded:", resp.read().decode())
-    time.sleep(3.0)  # updater runs at max_update_rate 1 Hz
+        if args.mesh:
+            verts, tris = wall_mesh(arm_az, side)
+            body = mesh_ply.encode(verts, tris)
+            url = f"{args.ar_bridge}/v0/scene_mesh?frame_id=base_link"
+            print("uploaded:", _request(url, "POST", body))
+            time.sleep(1.0)
+        else:
+            pts = np.concatenate([wall(arm_az, side), robot]).astype(np.float32)
+            url = f"{args.ar_bridge}/v0/cloud?frame_id=base_link&name=moveit_check"
+            print("uploaded:", _request(url, "POST", ply.encode(pts)))
+            time.sleep(3.0)  # updater runs at max_update_rate 1 Hz
 
     results["halfway IN COLLISION after upload"] = not node.valid(halfway)
     results["start still valid (self-filter)"] = node.valid(start)
@@ -308,6 +359,11 @@ def main() -> int:
             results["/joint_states reached the goal"] = True
         except TimeoutError:
             results["/joint_states reached the goal"] = False
+
+    if args.clear_after:
+        print("cleared:", _request(f"{args.ar_bridge}/v0/cloud", "DELETE"))
+        time.sleep(2.0)
+        results["Clear removed the obstacle (halfway valid again)"] = node.valid(halfway)
 
     for k, v in results.items():
         print(f"  [{'PASS' if v else 'FAIL'}] {k}")

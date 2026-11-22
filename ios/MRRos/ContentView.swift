@@ -66,6 +66,26 @@ struct ContentView: View {
         .sheet(isPresented: $showConnection) {
             ConnectionSheet(session: session)
         }
+        .sheet(isPresented: $scanScene.showScenes) {
+            ScenesSheet(scanScene: scanScene, robotScene: scene, arBridgeURL: session.settings.arBridgeURL)
+        }
+    }
+}
+
+/// The upload menu's entries (scan bar and saved scenes): what goes to ROS.
+struct UploadChoices: View {
+    let upload: (ScanScene.UploadMode) -> Void
+
+    var body: some View {
+        Button { upload(.points) } label: {
+            Label("Upload points (MoveIt octomap)", systemImage: "circle.grid.3x3")
+        }
+        Button { upload(.mesh) } label: {
+            Label("Upload mesh (collision object)", systemImage: "cube.transparent")
+        }
+        Button { upload(.both) } label: {
+            Label("Upload both", systemImage: "square.stack.3d.up")
+        }
     }
 }
 
@@ -241,6 +261,14 @@ struct ScanActions: View {
     var body: some View {
         HStack(spacing: 8) {
             Button {
+                scanScene.showScenes = true
+            } label: {
+                Image(systemName: "folder")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Saved scenes")
+
+            Button {
                 scanScene.request = .capture
             } label: {
                 FittingLabel("Capture", systemImage: "camera.metering.matrix")
@@ -257,8 +285,12 @@ struct ScanActions: View {
             .disabled(scanScene.pointCount == 0 && scanScene.exclusionIDs.isEmpty)
             .accessibilityLabel("Clear scan and exclusion boxes")
 
-            Button {
-                scanScene.request = .upload
+            // Tap opens the choice, so it can't be missed (a long-press menu was).
+            Menu {
+                UploadChoices { mode in
+                    scanScene.uploadMode = mode
+                    scanScene.request = .upload
+                }
             } label: {
                 if scanScene.isUploading {
                     ProgressView()

@@ -192,4 +192,49 @@ struct ARBridgeClientTests {
             try await client.clearCloud()
         }
     }
+
+    @Test func listScenesDecodesRows() async throws {
+        let mock = MockHTTPTransport()
+        let body = #"{"scenes": [{"id": "bench_1", "manifest": {"name": "Bench", "createdAt": "2026-11-21T10:00:00Z", "pointCount": 12, "robotName": "ur10e", "extra": 1}}]}"#
+        await mock.respond(whenURLContains: "/v0/scenes", with: HTTPResponse(statusCode: 200, data: Data(body.utf8), headers: [:]))
+        let rows = try await ARBridgeClient(baseURL: baseURL, transport: mock).listScenes()
+        #expect(rows.map(\.id) == ["bench_1"])
+        #expect(rows.first?.manifest.pointCount == 12)
+    }
+
+    @Test func putSceneFileSendsBodyToTheFilePath() async throws {
+        let mock = MockHTTPTransport()
+        await mock.respond(whenURLContains: "/v0/scenes/", with: HTTPResponse(statusCode: 200, data: Data("{}".utf8), headers: [:]))
+        try await ARBridgeClient(baseURL: baseURL, transport: mock).putSceneFile(id: "bench_1", file: "points.ply", data: Data([1, 2]))
+        let puts = await mock.puts
+        #expect(puts.first?.url.path == "/v0/scenes/bench_1/points.ply")
+        #expect(puts.first?.body == Data([1, 2]))
+    }
+
+    @Test func unsafeSceneIDsNeverReachTheNetwork() async {
+        let mock = MockHTTPTransport()
+        let client = ARBridgeClient(baseURL: baseURL, transport: mock)
+        for bad in ["../x", "a/b", ".hidden", "", "a b"] {
+            await #expect(throws: ARBridgeError.self) { try await client.deleteScene(id: bad) }
+        }
+        #expect(await mock.requestedURLs.isEmpty)
+    }
+
+    @Test func missingSceneIsNotFound() async {
+        let mock = MockHTTPTransport()
+        await mock.respond(whenURLContains: "/v0/scenes/", with: HTTPResponse(statusCode: 404, data: Data("gone".utf8), headers: [:]))
+        await #expect(throws: ARBridgeError.notFound("gone")) {
+            try await ARBridgeClient(baseURL: baseURL, transport: mock).sceneFile(id: "x", file: "scene.json")
+        }
+    }
+
+    @Test func uploadSceneMeshPostsToTheMeshEndpoint() async throws {
+        let mock = MockHTTPTransport()
+        let body = #"{"triangles": 12, "vertices": 8, "object_id": "mrros_scan_mesh", "applied": true}"#
+        await mock.respond(whenURLContains: "/v0/scene_mesh", with: HTTPResponse(statusCode: 200, data: Data(body.utf8), headers: [:]))
+        let result = try await ARBridgeClient(baseURL: baseURL, transport: mock).uploadSceneMesh(Data([1]), frameId: "base_link")
+        #expect(result == SceneMeshResult(triangles: 12, vertices: 8, objectId: "mrros_scan_mesh", applied: true))
+        #expect(await mock.requestedURLs.first?.query == "frame_id=base_link")
+        #expect(await mock.postedBodies == [Data([1])])
+    }
 }

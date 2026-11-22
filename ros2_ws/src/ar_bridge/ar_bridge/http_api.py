@@ -7,6 +7,7 @@ The node injects the ROS-side effects via `Handlers`.
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Any
 
 from aiohttp import web
 
@@ -28,6 +29,12 @@ class Handlers:
     on_cloud: Callable[[bytes, dict[str, str]], Awaitable[dict]] | None = None
     get_mesh: Callable[[str], Awaitable[MeshResult]] | None = None
     on_clear: Callable[[dict[str, str]], Awaitable[dict]] | None = None
+    # M5c scene library: an `ar_bridge.scenes.SceneLibrary` (duck-typed: list/read/write/delete)
+    # and the node's "filter + publish this stored scene".
+    scenes: Any = None
+    on_publish_scene: Callable[[str], Awaitable[dict]] | None = None
+    # M5c scan mesh -> MoveIt collision object (None without moveit_msgs: 501).
+    on_scene_mesh: Callable[[bytes, dict[str, str]], Awaitable[dict]] | None = None
 
 
 def _error_response(e: Exception) -> web.Response:
@@ -83,8 +90,65 @@ def make_app(handlers: Handlers, *, node_name: str = "ar_bridge") -> web.Applica
             return _error_response(e)
         return web.Response(body=data, content_type=content_type, headers={"X-Mesh-SHA256": sha256})
 
+    async def scene_mesh(request: web.Request) -> web.Response:
+        if handlers.on_scene_mesh is None:
+            raise web.HTTPNotImplemented(reason="scan mesh needs moveit_msgs on this machine")
+        body = await request.read()
+        try:
+            result = await handlers.on_scene_mesh(body, dict(request.query.items()))
+        except Exception as e:
+            return _error_response(e)
+        return web.json_response(result)
+
+    def _scenes() -> Any:
+        if handlers.scenes is None:
+            raise web.HTTPNotImplemented(reason="scene library not wired")
+        return handlers.scenes
+
+    async def list_scenes(_: web.Request) -> web.Response:
+        return web.json_response({"scenes": _scenes().list()})
+
+    async def get_scene_file(request: web.Request) -> web.Response:
+        lib, m = _scenes(), request.match_info
+        try:
+            data = lib.read(m["id"], m["file"])
+        except Exception as e:
+            return _error_response(e)
+        ctype = "application/json" if m["file"].endswith(".json") else "application/octet-stream"
+        return web.Response(body=data, content_type=ctype)
+
+    async def put_scene_file(request: web.Request) -> web.Response:
+        lib, m = _scenes(), request.match_info
+        try:
+            lib.write(m["id"], m["file"], await request.read())
+        except Exception as e:
+            return _error_response(e)
+        return web.json_response({"id": m["id"], "file": m["file"]})
+
+    async def delete_scene(request: web.Request) -> web.Response:
+        try:
+            _scenes().delete(request.match_info["id"])
+        except Exception as e:
+            return _error_response(e)
+        return web.json_response({"deleted": request.match_info["id"]})
+
+    async def publish_scene(request: web.Request) -> web.Response:
+        if handlers.on_publish_scene is None:
+            raise web.HTTPNotImplemented(reason="scene publish not wired")
+        try:
+            result = await handlers.on_publish_scene(request.match_info["id"])
+        except Exception as e:
+            return _error_response(e)
+        return web.json_response(result)
+
     app.add_routes(
         [
+            web.post("/v0/scene_mesh", scene_mesh),
+            web.get("/v0/scenes", list_scenes),
+            web.get("/v0/scenes/{id}/{file}", get_scene_file),
+            web.put("/v0/scenes/{id}/{file}", put_scene_file),
+            web.delete("/v0/scenes/{id}", delete_scene),
+            web.post("/v0/scenes/{id}/publish", publish_scene),
             web.get("/health", health),
             web.post("/v0/cloud", cloud),
             web.delete("/v0/cloud", clear_cloud),

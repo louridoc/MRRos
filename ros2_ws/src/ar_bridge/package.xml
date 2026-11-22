@@ -17,6 +17,8 @@
   <exec_depend>python3-aiohttp</exec_depend>
   <exec_depend>sensor_msgs_py</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
   <!-- trimesh (DAE/STL→OBJ for /v0/mesh) is optional and pip-installed: `pip install trimesh`. -->
 
   <test_depend>python3-pytest</test_depend>

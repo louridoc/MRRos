@@ -473,3 +473,42 @@ Findings log:
 - [ ] No hitch when connecting to ROS — DEFERRED to the end of the project (user, 2026-11-18)
 - 2026-11-18: robot-filter quality and "upload is green only" need the real robot; the user
   expects access in the coming weeks. Carried forward as pending real-robot checks (alongside M6).
+
+## M5c — scenes + adapters
+
+- [x] Part 1, MoveIt late join (2026-11-21, Mac, UR10e, isolated domain 42): upload, restart
+      move_group, `moveit_scene_check.py --no-upload --settle 8` → wall present, self-filter OK,
+      plan avoids it. Baseline on the old ar_bridge: **FAIL** (restarted move_group had no wall,
+      plan went through it). ar_bridge logs "new volatile subscriber … re-publishing in 3 s".
+      Unit tests: `test_late_join.py`.
+- [x] Part 2, scene format + filtering (2026-11-21): SceneLibrary tests (14, incl. push/pull with a
+      mocked ar_bridge); ar_bridge `test_scenes.py` reproduces Swift's filter exactly on a
+      Swift-written fixture (rotated robot box, padding, yawed exclusion, crop: 840 of 3087 kept);
+      live ar_bridge: PUT fixture → listed → publish → `/mrros/static_cloud` width 840.
+- [ ] Device: Save a scene; force-quit; re-place (or restore) the robot; Load → scan and boxes
+      overlay where they were. Load replaces the current scan.
+- [ ] Device: Upload a saved scene from the list WITHOUT placing the robot → same cloud in RViz as
+      uploading it live.
+- [ ] Device: Copy to ROS machine → appears under "On ROS machine"; Publish from there → RViz;
+      delete it on the phone, Download it back → identical (same point count).
+- [ ] Device: Share… → AirDrop the .zip to the Mac; Files app shows Documents/Scenes.
+- [x] ar_bridge configurable from any workspace (2026-11-21): `ar_bridge.launch.py` with
+      `params_file` (default config/ar_bridge.yaml) + per-parameter overrides; checked live:
+      overrides (`scenes_dir`, `http_port`, `clear_octomap_service:=none`), a custom yaml with `~`,
+      and the dev bringup's `scenes_dir:=` passthrough. (`ros2 launch` rejects empty `name:=`,
+      hence `none` to disable clearing.)
+- [x] Part 3a, scan mesh → MoveIt collision object (2026-11-21, Mac): `moveit_scene_check.py --mesh`
+      (wall as 12 triangles) passes on UR10e and CRX-30iA incl. execute; restart move_group →
+      mesh re-applied, plan avoids it; `--clear-after` → Clear removes it.
+- [x] Found while testing 3a and fixed (measured from logs): Clear then upload within 1 s left the
+      octomap EMPTY — MoveIt's updater (max_update_rate 1 Hz) dropped the scan after the Clear's
+      empty cloud, and the late-join re-send cleared the octomap and was throttled too. Now: one
+      re-send 1.5 s after every publish; re-sends never clear. Verified: 2 fresh CRX starts × (3
+      points + 1 mesh) all pass, first upload right after start included; UR10e restart still OK.
+- [x] Part 3b/c, app mesh + scenes with mesh (2026-11-21): LiDARScan `ScanMesh`/`MeshPLY` (Python
+      decodes the Swift-written mesh exactly); scene fixture regenerated with a mesh — Python's
+      centroid filter keeps exactly Swift's 392 of 1029 triangles; live: fixture pushed with mesh,
+      published → 840 pts + 392 triangles, `mrros_scan_mesh` in MoveIt's world.
+- [ ] Device: Upload (tap) → "Upload mesh": RViz MotionPlanning shows the room as a mesh; the real
+      robot's own surfaces are NOT in it (else MoveIt says the start state is in collision).
+- [ ] Device: Both; Clear empties both; save a scene with mesh, upload it from the list as Mesh.

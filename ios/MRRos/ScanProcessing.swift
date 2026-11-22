@@ -9,6 +9,10 @@ struct MeshChunk: Sendable {
     let stride: Int
     let count: Int
     let transform: simd_float4x4
+    /// Triangle vertex indices (`bytesPerIndex` each, 3 per triangle) for the mesh upload (M5c).
+    let faces: Data
+    let bytesPerIndex: Int
+    let triangleCount: Int
 
     init?(_ anchor: ARMeshAnchor) {
         let source = anchor.geometry.vertices
@@ -18,6 +22,34 @@ struct MeshChunk: Sendable {
         stride = source.stride
         count = source.count
         transform = anchor.transform
+        let f = anchor.geometry.faces
+        if f.indexCountPerPrimitive == 3, f.bytesPerIndex == 4 || f.bytesPerIndex == 2 {
+            faces = Data(bytes: f.buffer.contents(), count: f.count * 3 * f.bytesPerIndex)
+            bytesPerIndex = f.bytesPerIndex
+            triangleCount = f.count
+        } else {
+            (faces, bytesPerIndex, triangleCount) = (Data(), 4, 0)
+        }
+    }
+
+    /// Appends this chunk as triangles in AR world space (vertices read like `appendWorldPoints`).
+    func appendWorldMesh(to mesh: inout ScanMesh) {
+        let offset = UInt32(mesh.vertices.count)
+        vertices.withUnsafeBytes { raw in
+            for i in 0 ..< count {
+                let (vx, vy, vz) = raw.loadUnaligned(fromByteOffset: i * stride, as: (Float, Float, Float).self)
+                let w = transform * SIMD4(vx, vy, vz, 1)
+                mesh.vertices.append(SIMD3(w.x, w.y, w.z))
+            }
+        }
+        faces.withUnsafeBytes { raw in
+            for k in 0 ..< triangleCount * 3 {
+                let index = bytesPerIndex == 4
+                    ? raw.loadUnaligned(fromByteOffset: k * 4, as: UInt32.self)
+                    : UInt32(raw.loadUnaligned(fromByteOffset: k * 2, as: UInt16.self))
+                mesh.indices.append(offset + index)
+            }
+        }
     }
 
     /// Appends this chunk's vertices in AR world space. ARKit packs them as 3 floats (12 bytes);
@@ -45,6 +77,11 @@ struct MeshChunk: Sendable {
 actor ScanProcessor {
     private var grid: VoxelAccumulator
     private var epoch = 0
+    /// The latest capture's chunks: ARKit's mesh anchors are the whole reconstruction since its
+    /// last reset, so the newest set IS the current room mesh (no accumulation needed).
+    private var latestChunks: [MeshChunk] = []
+    /// A loaded scene's mesh (AR world); live captures add their mesh on top of it.
+    private var loadedMesh = ScanMesh.empty
 
     init(voxelSize: Float) {
         grid = VoxelAccumulator(voxelSize: voxelSize)
@@ -52,6 +89,7 @@ actor ScanProcessor {
 
     func add(_ chunks: [MeshChunk], epoch: Int) -> PointCloud {
         adopt(epoch)
+        latestChunks = chunks
         let total = chunks.reduce(0) { $0 + $1.count }
         var x = [Float](), y = [Float](), z = [Float]()
         x.reserveCapacity(total)
@@ -64,13 +102,36 @@ actor ScanProcessor {
         return grid.cloud()
     }
 
+    /// Replaces the scan with `cloud` (already in AR world) — loading a saved scene. Later
+    /// captures add to it as usual.
+    func load(_ cloud: PointCloud, mesh: ScanMesh?, epoch: Int) -> PointCloud {
+        adopt(epoch)
+        latestChunks = []
+        loadedMesh = mesh ?? .empty
+        grid.removeAll()
+        grid.add(cloud)
+        return grid.cloud()
+    }
+
     /// Releases the grid's memory after a Clear even if no capture follows.
     func release(epoch: Int) {
         adopt(epoch)
     }
 
+    /// The room mesh from the latest capture, in AR world (empty before the first capture or
+    /// after a Clear).
+    func currentMesh() -> ScanMesh {
+        var mesh = loadedMesh
+        for chunk in latestChunks {
+            chunk.appendWorldMesh(to: &mesh)
+        }
+        return mesh
+    }
+
     private func adopt(_ newEpoch: Int) {
         if newEpoch > epoch {
+            latestChunks = []
+            loadedMesh = .empty
             grid.removeAll()
             epoch = newEpoch
         }

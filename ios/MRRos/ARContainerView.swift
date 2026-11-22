@@ -9,6 +9,7 @@ import os
 import RealityKit
 import RobotModel
 import ROSMessages
+import SceneLibrary
 import SwiftUI
 import UIKit
 import URDFKit
@@ -142,6 +143,11 @@ struct ARContainerView: UIViewRepresentable {
         private var captureTask: Task<Void, Never>?
         private var previewTask: Task<Void, Never>?
         private var lastCaptureNote = ""
+        /// Robot link boxes (base_link) from a loaded scene's scan time: removed on top of the
+        /// live robot, so where the real robot WAS when scanned can't come back as an obstacle.
+        private var sceneRobotBoxes: [StoredBox] = []
+        /// `nil` only if Documents is unavailable — the Scenes sheet then reports it.
+        private let sceneStore = try? SceneStore.standard()
         /// Re-created on every redraw, never kept from app start: RealityKit backs world anchors
         /// with ARKit anchors, and a restore (`.resetTracking, .removeExistingAnchors`) moves the
         /// world frame and drops them — an anchor made at launch left the preview displaced by
@@ -727,6 +733,9 @@ struct ARContainerView: UIViewRepresentable {
             case .upload: uploadScan()
             case .addExclusion: addExclusion()
             case .deleteSelected: deleteSelectedExclusion()
+            case let .saveScene(name): saveScene(named: name)
+            case let .loadScene(id): loadScene(id)
+            case let .uploadScene(id): uploadSavedScene(id)
             }
         }
 
@@ -771,6 +780,30 @@ struct ARContainerView: UIViewRepresentable {
         /// the world frame, the alignment and the placed robot all stay valid. Off for the restore
         /// path, which has just re-run the session from the saved map itself.
         private func clearScan(resetReconstruction: Bool = true) {
+            resetLocalScan(resetReconstruction: resetReconstruction)
+            // A user Clear also empties the ROS side (ar_bridge publishes an empty cloud and
+            // clears MoveIt's octomap) — otherwise RViz/MoveIt keep the last upload until the
+            // next one. The restore path doesn't: it isn't the user asking to empty the scene.
+            guard resetReconstruction else { return }
+            removeAllExclusions()
+            sceneRobotBoxes = []
+            scanScene.currentSceneName = nil
+            guard let arBridgeURL = session.settings.arBridgeURL else { return }
+            let client = ARBridgeClient(baseURL: arBridgeURL)
+            uploadTask?.cancel()
+            uploadTask = Task { [weak self] in
+                do {
+                    try await client.clearCloud(name: "live_scan")
+                    self?.scanScene.status = "Scan cleared here and on ROS. Move around, then capture again."
+                } catch {
+                    self?.log.error("cloud clear failed: \(String(describing: error), privacy: .public)")
+                    self?.scanScene.status = "Scan cleared here; couldn't clear ROS side: \(error)"
+                }
+            }
+        }
+
+        /// Empties the scan on the phone only (points, preview, counts; optionally ARKit's mesh).
+        private func resetLocalScan(resetReconstruction: Bool) {
             if resetReconstruction, let arView {
                 // Prefer the running config (keeps everything it has); never skip the reset just
                 // because it can't be read back — rebuild ours instead.
@@ -793,23 +826,13 @@ struct ARContainerView: UIViewRepresentable {
             scanScene.pointCount = 0
             scanScene.lastUploadSummary = nil
             scanScene.status = "Scan cleared. Move around, then capture again."
-            // A user Clear also empties the ROS side (ar_bridge publishes an empty cloud and
-            // clears MoveIt's octomap) — otherwise RViz/MoveIt keep the last upload until the
-            // next one. The restore path doesn't: it isn't the user asking to empty the scene.
-            guard resetReconstruction else { return }
-            removeAllExclusions()
-            guard let arBridgeURL = session.settings.arBridgeURL else { return }
-            let client = ARBridgeClient(baseURL: arBridgeURL)
-            uploadTask?.cancel()
-            uploadTask = Task { [weak self] in
-                do {
-                    try await client.clearCloud(name: "live_scan")
-                    self?.scanScene.status = "Scan cleared here and on ROS. Move around, then capture again."
-                } catch {
-                    self?.log.error("cloud clear failed: \(String(describing: error), privacy: .public)")
-                    self?.scanScene.status = "Scan cleared here; couldn't clear ROS side: \(error)"
-                }
-            }
+        }
+
+        /// Encoded, filtered upload bodies, prepared off the main thread.
+        private struct PreparedUpload: Sendable {
+            var frameId: String
+            var points: (data: Data, count: Int)?
+            var mesh: (data: Data, triangles: Int)?
         }
 
         private func uploadScan() {
@@ -822,56 +845,281 @@ struct ARContainerView: UIViewRepresentable {
                 return
             }
 
-            // Registration: if the robot has been placed/aligned, re-express every point
-            // relative to that alignment (position AND yaw) before rotating into ROS axis
-            // convention, so the cloud lands in base_link where the gizmo says the robot is.
-            // Uses the CURRENT alignment/crop/robot pose — re-aligning doesn't need a re-scan.
-            // Inputs are snapshotted here (boxes need RealityKit); filtering, registration and
-            // PLY encoding run off the main thread.
+            // Registration: if the robot has been placed/aligned, re-express everything relative
+            // to that alignment (position AND yaw) in ROS axes, so it lands in base_link where the
+            // gizmo says the robot is. Uses the CURRENT alignment/boxes/robot pose — re-aligning
+            // doesn't need a re-scan. Inputs are snapshotted here (boxes need RealityKit);
+            // filtering, registration and encoding run off the main thread. Mesh triangles are
+            // kept or dropped by their centroid, with exactly the boxes the points use.
+            let mode = scanScene.uploadMode
             let cloud = scanCloud
             let crop = cropBox()
             let exclusions = exclusionBoxes()
             let robot = robotBoxes()
             let alignment = alignment
+            let processor = processor
             let client = ARBridgeClient(baseURL: arBridgeURL)
             scanScene.isUploading = true
             scanScene.status = "Preparing upload…"
             uploadTask?.cancel()
             uploadTask = Task { [weak self] in
-                let prepared = await Task.detached(priority: .userInitiated) { () -> (Data, String, Int)? in
-                    let classes = SceneFilter.classify(
-                        cloud, crop: crop, exclusions: exclusions, robot: robot, robotPadding: Self.robotPadding
-                    )
-                    let kept = cloud.selecting(classes, equalTo: .kept)
-                    guard !kept.isEmpty else { return nil }
-                    if let alignment {
-                        let registered = CloudRegistration.registering(kept, against: alignment)
-                        return (PLYCodec.encode(registered), "base_link", registered.count)
+                let mesh = mode.sendsMesh ? await processor.currentMesh() : ScanMesh.empty
+                let prepared = await Task.detached(priority: .userInitiated) { () -> PreparedUpload in
+                    var out = PreparedUpload(frameId: alignment == nil ? "map" : "base_link")
+                    if mode.sendsPoints {
+                        let classes = SceneFilter.classify(
+                            cloud, crop: crop, exclusions: exclusions, robot: robot, robotPadding: Self.robotPadding
+                        )
+                        let kept = cloud.selecting(classes, equalTo: .kept)
+                        if !kept.isEmpty {
+                            let out3 = alignment.map { CloudRegistration.registering(kept, against: $0) }
+                                ?? CloudRegistration.rotatedToROSAxes(kept)
+                            out.points = (PLYCodec.encode(out3), out3.count)
+                        }
                     }
-                    let unregistered = CloudRegistration.rotatedToROSAxes(kept)
-                    return (PLYCodec.encode(unregistered), "map", unregistered.count)
+                    if mode.sendsMesh, !mesh.isEmpty {
+                        let classes = SceneFilter.classify(
+                            mesh.centroids(), crop: crop, exclusions: exclusions, robot: robot,
+                            robotPadding: Self.robotPadding
+                        )
+                        let kept = mesh.keepingTriangles(classes.map { $0 == .kept })
+                        if !kept.isEmpty {
+                            let out3 = alignment.map { CloudRegistration.registering(kept, against: $0) }
+                                ?? CloudRegistration.rotatedToROSAxes(kept)
+                            out.mesh = (MeshPLY.encode(out3), out3.triangleCount)
+                        }
+                    }
+                    return out
                 }.value
                 guard let self else { return }
-                guard let (data, frameId, count) = prepared else {
-                    scanScene.status = "Nothing left to upload — every point was filtered out (robot/crop)."
-                    scanScene.isUploading = false
+                defer { scanScene.isUploading = false }
+                if prepared.points == nil, prepared.mesh == nil {
+                    scanScene.status = mode.sendsMesh && mesh.isEmpty && !mode.sendsPoints
+                        ? "No mesh yet — capture first."
+                        : "Nothing left to upload — everything was filtered out (robot/boxes)."
                     return
                 }
-                scanScene.status = frameId == "map"
-                    ? "No robot placed — uploading \(count) points unregistered (frame \"map\")…"
-                    : "Uploading \(count) points…"
+                let frameId = prepared.frameId
+                var parts: [String] = []
                 do {
-                    // Fixed name + `.replace`: the client already holds the full accumulated,
-                    // voxel-filtered state, so every upload fully replaces the latched topic and
-                    // the on-disk file rather than relying on the server's append accumulator.
-                    let result = try await client.uploadCloud(data, frameId: frameId, name: "live_scan")
-                    scanScene.lastUploadSummary = "\(result.points) pts → \(result.topic) (\(frameId))"
-                    scanScene.status = "Uploaded \(result.points) points."
+                    if let points = prepared.points {
+                        scanScene.status = "Uploading \(points.count) points…"
+                        // Fixed name + `.replace`: the client holds the full accumulated,
+                        // voxel-filtered state, so every upload fully replaces the latched topic.
+                        let result = try await client.uploadCloud(points.data, frameId: frameId, name: "live_scan")
+                        parts.append("\(result.points) points")
+                    }
+                    if let mesh = prepared.mesh {
+                        scanScene.status = "Uploading mesh (\(mesh.triangles) triangles)…"
+                        let result = try await client.uploadSceneMesh(mesh.data, frameId: frameId)
+                        parts.append("\(result.triangles) triangles" + (result.applied ? "" : " (MoveIt not up yet)"))
+                    }
+                    let summary = parts.joined(separator: " + ")
+                    scanScene.lastUploadSummary = "\(summary) (\(frameId))"
+                    scanScene.status = frameId == "map"
+                        ? "Uploaded \(summary), unregistered (no robot placed, frame \"map\")."
+                        : "Uploaded \(summary)."
                 } catch {
-                    log.error("cloud upload failed: \(String(describing: error), privacy: .public)")
-                    scanScene.status = "Upload failed: \(error)"
+                    log.error("upload failed: \(String(describing: error), privacy: .public)")
+                    let done = parts.isEmpty ? "" : " (sent: \(parts.joined(separator: " + ")))"
+                    scanScene.status = "Upload failed: \(error)\(done)"
                 }
-                scanScene.isUploading = false
+            }
+        }
+
+        // MARK: Saved scenes (M5c)
+
+        func refreshSceneList() {
+            scanScene.scenes = sceneStore?.list() ?? []
+        }
+
+        /// Saves points + boxes in base_link, with the robot's link boxes at this moment (the
+        /// scan-time pose), so the scene can be filtered and uploaded later without AR.
+        private func saveScene(named name: String) {
+            guard let store = sceneStore else {
+                scanScene.status = "Can't save: the app's Documents folder isn't available."
+                return
+            }
+            guard let alignment else {
+                scanScene.status = "Place the robot first — scenes are saved relative to it."
+                return
+            }
+            guard !scanCloud.isEmpty else {
+                scanScene.status = "Nothing to save yet — capture a scan first."
+                return
+            }
+            let cloud = scanCloud
+            let robotNow = robotBoxes().map { StoredBox(world: $0, alignment: alignment) }
+            let joints: [String: Double] = session.jointState.map { js in
+                Dictionary(zip(js.name, js.position), uniquingKeysWith: { a, _ in a })
+            } ?? [:]
+            let manifest = SceneManifest(
+                name: name, robotName: session.robotName, joints: joints, pointCount: cloud.count,
+                cropEnabled: scanScene.cropEnabled, crop: crop,
+                exclusions: scanScene.exclusionIDs.compactMap { exclusions[$0] },
+                robotBoxes: robotNow, robotPadding: Self.robotPadding
+            )
+            scanScene.isWorkingOnScene = true
+            scanScene.status = "Saving “\(name)”…"
+            let processor = processor
+            Task { [weak self] in
+                let worldMesh = await processor.currentMesh()
+                let result = await Task.detached(priority: .userInitiated) { () -> Result<String, Error> in
+                    let points = CloudRegistration.registering(cloud, against: alignment)
+                    let mesh = worldMesh.isEmpty ? nil : CloudRegistration.registering(worldMesh, against: alignment)
+                    return Result { try store.save(SavedScene(manifest: manifest, points: points, mesh: mesh)) }
+                }.value
+                guard let self else { return }
+                scanScene.isWorkingOnScene = false
+                switch result {
+                case .success:
+                    scanScene.currentSceneName = name
+                    scanScene.status = "Saved “\(name)” (\(cloud.count) points)."
+                    refreshSceneList()
+                case let .failure(error):
+                    log.error("scene save failed: \(String(describing: error), privacy: .public)")
+                    scanScene.status = "Couldn't save: \(error)"
+                }
+            }
+        }
+
+        /// Replaces the current scan (here, not on ROS) with a saved scene, placed against the
+        /// current alignment; its boxes replace the current ones. Capturing continues on top.
+        private func loadScene(_ id: String) {
+            guard let store = sceneStore else { return }
+            guard alignment != nil else {
+                scanScene.status = "Place or restore the robot first — a scene is shown relative to it."
+                return
+            }
+            scanScene.isWorkingOnScene = true
+            scanScene.status = "Loading…"
+            Task { [weak self] in
+                let loaded = await Task.detached(priority: .userInitiated) { Result { try store.load(id) } }.value
+                guard let self else { return }
+                scanScene.isWorkingOnScene = false
+                let scene: SavedScene
+                switch loaded {
+                case let .success(s): scene = s
+                case let .failure(error):
+                    scanScene.status = "Couldn't load: \(error)"
+                    return
+                }
+                guard let alignment else { return } // robot removed meanwhile
+                apply(scene, alignment: alignment)
+            }
+        }
+
+        private func apply(_ scene: SavedScene, alignment: AlignmentTransform) {
+            let m = scene.manifest
+            resetLocalScan(resetReconstruction: true) // "load replaces": drop the current scan + mesh
+            removeAllExclusions()
+            crop = m.crop
+            cropVisual?.update(crop)
+            scanScene.cropEnabled = m.cropEnabled
+            for box in m.exclusions {
+                let id = nextExclusionID
+                nextExclusionID += 1
+                exclusions[id] = box
+                if let root = alignmentRoot {
+                    exclusionVisuals[id] = makeExclusionVisual(box, in: root)
+                }
+                scanScene.exclusionIDs.append(id)
+            }
+            refreshBoxSelection()
+            sceneRobotBoxes = m.robotBoxes
+            scanScene.currentSceneName = m.name
+            var note = "scene “\(m.name)”"
+            if let saved = m.robotName, let now = session.robotName, saved != now {
+                note += " — saved with \(saved), current robot is \(now)"
+            }
+            lastCaptureNote = note
+            let epoch = scanEpoch
+            let processor = processor
+            let points = scene.points
+            let mesh = scene.mesh
+            captureTask = Task { [weak self] in
+                let (world, worldMesh) = await Task.detached(priority: .userInitiated) {
+                    (
+                        CloudRegistration.toWorld(points, from: alignment),
+                        mesh?.mappingVertices { alignment.worldPoint(fromBaseLink: $0) }
+                    )
+                }.value
+                let cloud = await processor.load(world, mesh: worldMesh, epoch: epoch)
+                guard let self, epoch == scanEpoch else { return }
+                scanCloud = cloud
+                scanScene.pointCount = cloud.count
+                updateCropSummary()
+                refreshPreview()
+            }
+        }
+
+        /// Sends a saved scene to ROS straight from disk: filtered in base_link with its own boxes
+        /// and scan-time robot (plus the live robot if one is placed). No AR needed.
+        private func uploadSavedScene(_ id: String) {
+            guard let store = sceneStore else { return }
+            guard let arBridgeURL = session.settings.arBridgeURL else {
+                scanScene.status = "Connect to ar_bridge first (see connection settings)."
+                return
+            }
+            let liveRobot = alignment.map { a in
+                liveRobotBoxes().map { StoredBox(world: $0, alignment: a).orientedInBaseLink }
+            } ?? []
+            let client = ARBridgeClient(baseURL: arBridgeURL)
+            let mode = scanScene.uploadMode
+            scanScene.isWorkingOnScene = true
+            scanScene.isUploading = true
+            scanScene.status = "Preparing saved scene…"
+            uploadTask?.cancel()
+            uploadTask = Task { [weak self] in
+                let prepared = await Task.detached(priority: .userInitiated) { () -> Result<(PreparedUpload, String), Error> in
+                    Result {
+                        let scene = try store.load(id)
+                        var out = PreparedUpload(frameId: "base_link")
+                        if mode.sendsPoints {
+                            let kept = scene.filteredForUpload(liveRobot: liveRobot)
+                            if !kept.isEmpty { out.points = (PLYCodec.encode(kept), kept.count) }
+                        }
+                        if mode.sendsMesh, let kept = scene.filteredMeshForUpload(liveRobot: liveRobot) {
+                            out.mesh = (MeshPLY.encode(kept), kept.triangleCount)
+                        }
+                        return (out, scene.manifest.name)
+                    }
+                }.value
+                guard let self else { return }
+                defer {
+                    scanScene.isWorkingOnScene = false
+                    scanScene.isUploading = false
+                }
+                switch prepared {
+                case let .failure(error):
+                    scanScene.status = "Couldn't read the scene: \(error)"
+                case let .success((upload, name)):
+                    guard upload.points != nil || upload.mesh != nil else {
+                        scanScene.status = mode == .mesh
+                            ? "“\(name)” has no mesh (saved before meshes, or none captured)."
+                            : "“\(name)” has nothing left to upload after filtering."
+                        return
+                    }
+                    var parts: [String] = []
+                    do {
+                        if let points = upload.points {
+                            scanScene.status = "Uploading “\(name)” (\(points.count) points)…"
+                            let result = try await client.uploadCloud(points.data, frameId: "base_link", name: "live_scan")
+                            parts.append("\(result.points) points")
+                        }
+                        if let mesh = upload.mesh {
+                            scanScene.status = "Uploading “\(name)” mesh (\(mesh.triangles) triangles)…"
+                            let result = try await client.uploadSceneMesh(mesh.data, frameId: "base_link")
+                            parts.append("\(result.triangles) triangles" + (result.applied ? "" : " (MoveIt not up yet)"))
+                        }
+                        let summary = parts.joined(separator: " + ")
+                        scanScene.lastUploadSummary = "\(summary) (base_link)"
+                        scanScene.status = "Uploaded “\(name)”: \(summary)."
+                    } catch {
+                        log.error("scene upload failed: \(String(describing: error), privacy: .public)")
+                        scanScene.status = "Upload failed: \(error)"
+                    }
+                }
             }
         }
 
@@ -883,6 +1131,12 @@ struct ARContainerView: UIViewRepresentable {
         /// fine: MoveIt still filters exactly, and this makes the phone's own output clean for
         /// any other planner.
         private func robotBoxes() -> [OrientedBox] {
+            let fromScene = alignment.map { a in sceneRobotBoxes.map { $0.oriented(in: a) } } ?? []
+            return fromScene + liveRobotBoxes()
+        }
+
+        /// The AR robot's link boxes at its current pose, in AR world.
+        private func liveRobotBoxes() -> [OrientedBox] {
             guard let robot else { return [] }
             return robot.linkEntities.values.compactMap { link in
                 let bounds = link.visualBounds(recursive: true, relativeTo: link)
