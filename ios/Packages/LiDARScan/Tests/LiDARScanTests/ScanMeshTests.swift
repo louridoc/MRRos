@@ -22,7 +22,11 @@ struct ScanMeshTests {
         let data = MeshPLY.encode(mesh)
         #expect(try MeshPLY.decode(data) == mesh)
         let headerEnd = try #require(data.range(of: Data("end_header\n".utf8))).upperBound
-        #expect(data.count - headerEnd == 7 * 12 + 3 * 13)
+        // 7 vertices x 12 bytes + 3 faces x 13 bytes. Kept out of #expect: older compilers
+        // time out type-checking the literal arithmetic inside the macro.
+        let bodyBytes: Int = data.count - headerEnd
+        let expected: Int = 7 * 12 + 3 * 13
+        #expect(bodyBytes == expected)
     }
 
     @Test func centroidsOnePerTriangle() {

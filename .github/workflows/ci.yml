@@ -8,7 +8,7 @@ jobs:
   swift:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: maxim-lobanov/setup-xcode@v1
         with: { xcode-version: latest-stable }
       - name: Package tests (macOS)
@@ -16,7 +16,7 @@ jobs:
       - name: Simulator build
         run: |
           brew install xcodegen
-          tools/ios-build.sh "iPhone 16 Pro" | tee build.log
+          tools/ios-build.sh | tee build.log
           grep -q "BUILD SUCCEEDED" build.log
 
   ros:
@@ -27,16 +27,21 @@ jobs:
     runs-on: ubuntu-24.04
     container: ros:${{ matrix.distro }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Python deps
+        # A venv on top of the system packages: pip must not replace Ubuntu's own pytest/pluggy
+        # (that fails on 24.04), and ROS's numpy stays the system one. Humble's numpy 1.21 needs
+        # trimesh < 4.5 (newer trimesh breaks on it; same pin as the README).
         run: |
-          apt-get update && apt-get install -y python3-pip git netcat-openbsd
-          pip3 install aiohttp pytest pytest-asyncio ruff numpy trimesh 2>/dev/null \
-            || pip3 install --break-system-packages aiohttp pytest pytest-asyncio ruff numpy trimesh
+          apt-get update && apt-get install -y python3-pip python3-venv git netcat-openbsd
+          python3 -m venv --system-site-packages /opt/ci
+          trimesh=trimesh
+          [ "${{ matrix.distro }}" = humble ] && trimesh="trimesh<4.5"
+          /opt/ci/bin/pip install -q aiohttp pytest pytest-asyncio ruff "$trimesh"
       - name: Lint
-        run: ruff check ros2_ws tools
+        run: /opt/ci/bin/ruff check ros2_ws tools
       - name: Unit tests
-        run: cd ros2_ws && pytest -q
+        run: cd ros2_ws && /opt/ci/bin/python -m pytest -q
       - name: External sources for ${{ matrix.distro }}
         run: tools/fetch-external.sh ${{ matrix.distro }}
       - name: Build
@@ -44,7 +49,7 @@ jobs:
         run: |
           source /opt/ros/${{ matrix.distro }}/setup.bash
           cd ros2_ws
-          rosdep update && rosdep install --from-paths src --ignore-src -y -r
+          PIP_BREAK_SYSTEM_PACKAGES=1 rosdep update && PIP_BREAK_SYSTEM_PACKAGES=1 rosdep install --from-paths src --ignore-src -y -r
           colcon build --packages-up-to ar_dev_bringup ar_bridge
       - name: Launch smoke test (every supported robot)
         shell: bash

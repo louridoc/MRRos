@@ -90,6 +90,9 @@ These steps mirror the repository's CI workflow, but they have not yet been run 
 Ubuntu machine. Please open an issue if something is missing. `PIP_BREAK_SYSTEM_PACKAGES=1` lets
 rosdep install the one pip-only dependency (`trimesh`, for mesh serving) on Ubuntu 24.04.
 
+**Humble (Ubuntu 22.04):** recent `trimesh` releases don't work with its numpy 1.21. After rosdep,
+run `pip install "trimesh<4.5"`.
+
 ### What the dev bringup starts
 
 `ar_dev_bringup` gives you a complete test setup without a real robot:
