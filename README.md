@@ -1,5 +1,8 @@
 # MRRos
 
+[![CI](https://github.com/louridoc/MRRos/actions/workflows/ci.yml/badge.svg)](https://github.com/louridoc/MRRos/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 An iPhone/iPad app (LiDAR, iOS 18+) that joins a **ROS 2** network to:
 
 - **show the robot in augmented reality.** The app builds the robot from `robot_description`,
