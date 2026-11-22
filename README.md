@@ -15,6 +15,8 @@ An iPhone/iPad app (LiDAR, iOS 18+) that joins a **ROS 2** network to:
 - **save scenes** so you can send them to the robot later without re-scanning, on the phone or in
   a library on the ROS machine.
 
+**Demo video:** [youtu.be/47573GTEQGc](https://youtu.be/47573GTEQGc) · **Project page:** [louridoc.github.io/projects/project-6](https://louridoc.github.io/projects/project-6)
+
 Supported robots out of the box: FANUC CRX-30iA and CRX-20iA/L, Universal Robots UR10e, UR20 and
 UR30. Other robots work too: their meshes are served by the companion node. ROS 2 Humble, Jazzy
 and Lyrical.
